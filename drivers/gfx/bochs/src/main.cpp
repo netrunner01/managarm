@@ -406,7 +406,15 @@ size_t GfxDevice::BufferObject::getSize() {
 }
 
 std::pair<helix::BorrowedDescriptor, uint64_t> GfxDevice::BufferObject::getMemory() {
-	return std::make_pair(helix::BorrowedDescriptor{_memoryView}, getAddress());
+	// _memoryView is already a slice that STARTS at _offset + _displacement (see the
+	// helCreateSliceView call in the constructor), so the offset returned here must be
+	// zero. Returning getAddress() applies the displacement a second time, which pushes
+	// the mapping past the end of a slice only _size bytes long. That is invisible for
+	// the first buffer, whose offset is 0, but leaves every subsequent buffer mapped
+	// somewhere the scanout does not read -- so a double-buffered compositor renders a
+	// correct frame, then a blank one, alternating. gfx-plainfb and gfx-vmware both
+	// return 0 here.
+	return std::make_pair(helix::BorrowedDescriptor{_memoryView}, 0);
 }
 
 size_t GfxDevice::BufferObject::getAlignment() {

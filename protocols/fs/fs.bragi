@@ -532,6 +532,11 @@ head(128):
 		tag(49) int32 snd_pcm_ttstamp;
 		tag(50) uint64 snd_pcm_frames;
 		tag(51) int32 snd_device;
+
+		// DRM_IOCTL_WAIT_VBLANK. The type carries the DRM_VBLANK_* flags,
+		// including the CRTC index encoded at DRM_VBLANK_HIGH_CRTC_SHIFT.
+		tag(52) uint32 drm_vblank_type;
+		tag(53) uint32 drm_vblank_sequence;
 	}
 }
 
@@ -647,6 +652,11 @@ head(128):
 		tag(76) uint64 snd_frame_size;
 		tag(77) int64 snd_result;
 		tag(78) int32 snd_device;
+
+		// DRM_IOCTL_WAIT_VBLANK.
+		tag(79) uint32 drm_vblank_sequence;
+		tag(80) int64 drm_vblank_sec;
+		tag(81) int64 drm_vblank_usec;
 	}
 }
 

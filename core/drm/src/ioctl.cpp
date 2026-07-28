@@ -703,6 +703,73 @@ struct drm_core::File::HandleIoctl {
 			);
 			HEL_CHECK(send_resp.error());
 			logBragiReply(resp);
+		}else if(req.command() == DRM_IOCTL_WAIT_VBLANK) {
+			managarm::fs::GenericIoctlReply resp;
+
+			if (logDrmRequests)
+				std::println("core/drm: WAIT_VBLANK(type {:#x}, seq {})",
+						req.drm_vblank_type(), req.drm_vblank_sequence());
+
+			// We only implement the *instant query* form: relative, zero sequence,
+			// i.e. "tell me the current sequence and timestamp without blocking".
+			// That is the one weston's drm_output_start_repaint_loop() issues, and
+			// answering it lets weston call weston_output_finish_frame() directly
+			// instead of falling back to a no-op page flip -- which measured as a
+			// second, redundant flip on every single frame.
+			//
+			// A genuine blocking wait would need a vblank interrupt we do not have
+			// on these devices, so reject anything else rather than pretend: the
+			// caller then takes whatever fallback it already had.
+			auto type = req.drm_vblank_type();
+
+			// Reject a blocking wait (non-zero relative sequence or an absolute
+			// target) and the event form, both of which need a real vblank IRQ.
+			if((type & _DRM_VBLANK_TYPES_MASK) != _DRM_VBLANK_RELATIVE
+					|| (type & _DRM_VBLANK_EVENT)
+					|| req.drm_vblank_sequence() != 0) {
+				resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+			}else{
+				size_t crtcIndex = (type & _DRM_VBLANK_HIGH_CRTC_MASK)
+						>> _DRM_VBLANK_HIGH_CRTC_SHIFT;
+				auto &crtcs = self->_device->getCrtcs();
+
+				if(crtcIndex >= crtcs.size()) {
+					resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+				}else{
+					uint64_t now;
+					HEL_CHECK(helGetClock(&now));
+
+					// Synthesise the sequence from the mode's refresh rate. There is
+					// no vblank counter in hardware here, and the page-flip path
+					// already reports a timestamp sampled with helGetClock() rather
+					// than a real scanout time (see the TODO in core.cpp), so this is
+					// no less accurate than what callers already consume. Weston
+					// ignores the sequence on this path and uses only the timestamp.
+					uint32_t sequence = 0;
+					auto mode = crtcs[crtcIndex]->drmState()->mode;
+					if(mode) {
+						drm_mode_modeinfo info;
+						memcpy(&info, mode->data(), sizeof(info));
+						uint64_t vrefresh = info.vrefresh;
+						if(!vrefresh && info.htotal && info.vtotal)
+							vrefresh = (static_cast<uint64_t>(info.clock) * 1000)
+									/ (static_cast<uint32_t>(info.htotal) * info.vtotal);
+						if(vrefresh)
+							sequence = (now * vrefresh) / 1000000000ull;
+					}
+
+					resp.set_drm_vblank_sequence(sequence);
+					resp.set_drm_vblank_sec(now / 1000000000ull);
+					resp.set_drm_vblank_usec((now % 1000000000ull) / 1000);
+					resp.set_error(managarm::fs::Errors::SUCCESS);
+				}
+			}
+
+			auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
+				helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
+			);
+			HEL_CHECK(send_resp.error());
+			logBragiReply(resp);
 		}else if(req.command() == DRM_IOCTL_MODE_DIRTYFB) {
 			managarm::fs::GenericIoctlReply resp;
 

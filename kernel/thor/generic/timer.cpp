@@ -15,7 +15,19 @@ struct DeadlineState {
 	frg::optional<uint64_t> timerDeadline{};
 	frg::optional<uint64_t> preemptionDeadline{};
 
+	// Cache of what we last programmed into the timer hardware, used to skip redundant
+	// reprogramming. `hwArmed` records whether the hardware still actually holds it.
+	//
+	// Timer IRQs are one shot -- in TSC-deadline mode the MSR is cleared by hardware when
+	// it fires -- so the cache goes stale on every IRQ and handleTimerInterrupt() must
+	// invalidate it. This matters because the deadline is programmed in a different clock
+	// domain than getClockNanos() (see setTimerDeadline()), so an IRQ can arrive a hair
+	// BEFORE getClockNanos() reaches the deadline. Such an IRQ clears no deadline, so the
+	// recomputed deadline is unchanged; without invalidation updateDeadline_() would skip
+	// setTimerDeadline() and leave the timer disarmed forever, wedging every timer on this
+	// CPU permanently.
 	frg::optional<uint64_t> currentDeadline{};
+	bool hwArmed{false};
 };
 
 extern PerCpu<DeadlineState> deadlineState;
@@ -37,16 +49,20 @@ void updateDeadline_() {
 	consider(state.timerDeadline);
 	consider(state.preemptionDeadline);
 
-	// No need to do anything if the current deadline didn't change.
+	// No need to do anything if the hardware is already in the state we want. Note that
+	// this is gated on hwArmed: an unchanged deadline does NOT imply the hardware still
+	// holds it, because one shot timers disarm themselves when they fire.
 
 	// FIXME(qookie): This is just deadline == state.currentDeadline,
 	// but frg::optional is missing the overload to do that.
-	if (!deadline && !state.currentDeadline)
+	if (!deadline && !state.hwArmed)
 		return;
-	if (deadline && state.currentDeadline && deadline == *state.currentDeadline)
+	if (deadline && state.hwArmed && state.currentDeadline
+			&& deadline == *state.currentDeadline)
 		return;
 
 	state.currentDeadline = deadline;
+	state.hwArmed = static_cast<bool>(deadline);
 	setTimerDeadline(state.currentDeadline);
 }
 
@@ -85,6 +101,12 @@ void handleTimerInterrupt() {
 
 	auto timerExpired = checkAndClear(state.timerDeadline);
 	auto preemptionExpired = checkAndClear(state.preemptionDeadline);
+
+	// The one shot timer disarmed itself when it fired, so our cached view of the
+	// hardware is now stale. Invalidate it before recomputing: otherwise an early IRQ
+	// (which clears no deadline, hence recomputes an unchanged one) would skip
+	// reprogramming and leave the timer disarmed forever.
+	state.hwArmed = false;
 
 	// Update the timer hardware.
 	updateDeadline_();

@@ -219,9 +219,25 @@ public:
 
 		if(_activeTimer)
 			_activeTimer->cancel();
+
+		// Reprogramming the timer resets the expiration count, on BOTH the arm and the
+		// disarm path. An expiration that was pending refers to the timer we just
+		// cancelled, not to the new setting.
+		//
+		// Clearing this only when arming (as it used to) leaves a stale count behind on
+		// timerfd_settime(it_value = 0). pollStatus() reports EPOLLIN whenever _expirations
+		// is non-zero, and once _activeTimer is null nothing can ever increment or clear it
+		// again except a read() -- which a client that believes the timer disarmed will
+		// never issue. The fd is then permanently readable, so epoll returns it on every
+		// epoll_wait forever. libwayland hits this through its normal idiom: it calls
+		// clear_timer() (timerfd_settime with it_value = 0) once its timer heap empties, so
+		// a timer firing just before the heap empties pins the fd. The result is weston's
+		// event loop spinning at ~58000 epoll checks/second with posix/subsystem burning
+		// CPU servicing the round trips.
+		_expirations = 0;
+
 		if(initialNanos || intervalNanos) {
 			_activeTimer = std::make_shared<Timer>(weakFile(), initialNanos, intervalNanos);
-			_expirations = 0;
 			Timer::arm(_activeTimer);
 		} else {
 			// disarm timer

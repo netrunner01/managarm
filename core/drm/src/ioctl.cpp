@@ -1,5 +1,7 @@
 #include <libdrm/drm_fourcc.h>
 
+#include <algorithm>
+
 #include <bragi/helpers-std.hpp>
 #include <core/dispatch.hpp>
 #include "fs.bragi.hpp"
@@ -177,14 +179,30 @@ struct drm_core::File::HandleIoctl {
 				resp.set_drm_value(1);
 				if (logDrmRequests)
 					std::println("\tCAP_CRTC_IN_VBLANK_EVENT supported");
-			} else if (req.drm_capability() == DRM_CAP_CURSOR_WIDTH) {
-				resp.set_drm_value(self->_device->getCursorWidth());
-				if (logDrmRequests)
-					std::println("\tCAP_CURSOR_WIDTH supported");
-			} else if (req.drm_capability() == DRM_CAP_CURSOR_HEIGHT) {
-				resp.set_drm_value(self->_device->getCursorHeight());
-				if (logDrmRequests)
-					std::println("\tCAP_CURSOR_HEIGHT supported");
+			} else if (req.drm_capability() == DRM_CAP_CURSOR_WIDTH
+					|| req.drm_capability() == DRM_CAP_CURSOR_HEIGHT) {
+				// Only advertise a hardware cursor if some CRTC actually has a cursor
+				// plane. _cursorWidth/_cursorHeight default to 32 and only nvidia-open
+				// ever calls setupCursorDimensions(), so drivers with a primary plane
+				// only (bochs, virtio, plainfb) used to claim a 32x32 hardware cursor
+				// they cannot display. A compositor that believes this stops compositing
+				// a software cursor, then every DRM_IOCTL_MODE_CURSOR fails with
+				// NO_BACKING_DEVICE: the pointer never moves on screen and, because
+				// pointer motion no longer damages anything, the screen stops
+				// repainting except where some other surface happens to redraw.
+				// Reporting 0 is the documented way to say "no hardware cursor" and
+				// makes userspace fall back to a software cursor.
+				auto &crtcs = self->_device->getCrtcs();
+				bool hasCursorPlane = std::any_of(crtcs.begin(), crtcs.end(),
+						[] (drm_core::Crtc *crtc) { return crtc->cursorPlane() != nullptr; });
+
+				if (!hasCursorPlane) {
+					resp.set_drm_value(0);
+				} else if (req.drm_capability() == DRM_CAP_CURSOR_WIDTH) {
+					resp.set_drm_value(self->_device->getCursorWidth());
+				} else {
+					resp.set_drm_value(self->_device->getCursorHeight());
+				}
 			} else if (req.drm_capability() == DRM_CAP_PRIME) {
 				resp.set_drm_value(DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT);
 				if (logDrmRequests)

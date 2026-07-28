@@ -23,7 +23,11 @@ struct GfxDevice final : drm_core::Device, std::enable_shared_from_this<GfxDevic
 		void commit(std::unique_ptr<drm_core::AtomicState> state) override;
 
 	private:
-		async::detached _doCommit(std::unique_ptr<drm_core::AtomicState> state);
+		// `lastMode` must be sampled by commit() BEFORE it publishes the new state
+		// via setDrmState(), otherwise _doCommit() reads back the mode it is about
+		// to program and concludes no mode switch is needed.
+		async::detached _doCommit(drm_mode_modeinfo lastMode,
+				std::unique_ptr<drm_core::AtomicState> state);
 
 		GfxDevice *_device;
 	};

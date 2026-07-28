@@ -236,24 +236,30 @@ void GfxDevice::Configuration::dispose() {
 }
 
 void GfxDevice::Configuration::commit(std::unique_ptr<drm_core::AtomicState> state) {
+	// Sample the CURRENTLY programmed mode before publishing the new state below.
+	// setDrmState() overwrites drmState(), so reading it afterwards (as _doCommit
+	// used to) always yielded the incoming mode, making the mode-switch test
+	// compare the new mode against itself. It was therefore never true and the
+	// resolution/bpp registers were never written.
+	drm_mode_modeinfo last_mode;
+	memset(&last_mode, 0, sizeof(drm_mode_modeinfo));
+	if(_device->_theCrtc->drmState()->mode)
+		memcpy(&last_mode, _device->_theCrtc->drmState()->mode->data(), sizeof(drm_mode_modeinfo));
+
 	_device->_theCrtc->setDrmState(state->crtc(_device->_theCrtc->id()));
 	_device->_theConnector->setDrmState(state->connector(_device->_theConnector->id()));
 	_device->_primaryPlane->setDrmState(state->plane(_device->_primaryPlane->id()));
 
-	_doCommit(std::move(state));
+	_doCommit(last_mode, std::move(state));
 }
 
-async::detached GfxDevice::Configuration::_doCommit(std::unique_ptr<drm_core::AtomicState> state) {
+async::detached GfxDevice::Configuration::_doCommit(drm_mode_modeinfo last_mode,
+		std::unique_ptr<drm_core::AtomicState> state) {
 	if(logCommits)
 		std::cout << "gfx-bochs: Committing configuration" << std::endl;
 
 	auto primary_plane_state = state->plane(_device->_primaryPlane->id());
 	auto crtc_state = state->crtc(_device->_theCrtc->id());
-
-	drm_mode_modeinfo last_mode;
-	memset(&last_mode, 0, sizeof(drm_mode_modeinfo));
-	if(_device->_theCrtc->drmState()->mode)
-		memcpy(&last_mode, _device->_theCrtc->drmState()->mode->data(), sizeof(drm_mode_modeinfo));
 
 	auto switch_mode = last_mode.hdisplay != primary_plane_state->src_w || last_mode.vdisplay != primary_plane_state->src_h;
 

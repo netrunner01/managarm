@@ -43,13 +43,19 @@ void drm_core::File::attachFrameBuffer(std::shared_ptr<drm_core::FrameBuffer> fr
 	_frameBuffers.push_back(frame_buffer);
 }
 
-void drm_core::File::detachFrameBuffer(drm_core::FrameBuffer *frame_buffer) {
+// Returns false if the framebuffer was not attached to this file. That is not an
+// internal error: userspace is free to name a framebuffer it has already closed, or
+// one that belongs to a different file, and both RMFB and CLOSEFB must answer with
+// an error rather than take the driver down.
+bool drm_core::File::detachFrameBuffer(drm_core::FrameBuffer *frame_buffer) {
 	auto it = std::find_if(_frameBuffers.begin(), _frameBuffers.end(),
 			([&](std::shared_ptr<drm_core::FrameBuffer> fb) {
 				return fb.get() == frame_buffer;
 			}));
-	assert(it != _frameBuffers.end());
+	if(it == _frameBuffers.end())
+		return false;
 	_frameBuffers.erase(it);
+	return true;
 }
 
 const std::vector<std::shared_ptr<drm_core::FrameBuffer>> &drm_core::File::getFrameBuffers() {

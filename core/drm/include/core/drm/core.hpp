@@ -67,7 +67,7 @@ struct File {
 	void setBlocking(bool blocking);
 
 	void attachFrameBuffer(std::shared_ptr<FrameBuffer> frame_buffer);
-	void detachFrameBuffer(FrameBuffer *frame_buffer);
+	bool detachFrameBuffer(FrameBuffer *frame_buffer);
 	const std::vector<std::shared_ptr<FrameBuffer>> &getFrameBuffers();
 
 	/**

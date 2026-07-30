@@ -540,18 +540,26 @@ struct drm_core::File::HandleIoctl {
 			);
 			HEL_CHECK(send_resp.error());
 			logBragiReply(resp);
-		}else if(req.command() == DRM_IOCTL_MODE_RMFB) {
+		// CLOSEFB shares RMFB's implementation deliberately. On Linux the two differ in
+		// that RMFB additionally disables any plane still scanning out the framebuffer,
+		// but detachFrameBuffer() has never done that, so managarm's RMFB already has
+		// CLOSEFB semantics and the two collapse to the same handler here.
+		}else if(req.command() == DRM_IOCTL_MODE_RMFB
+				|| req.command() == DRM_IOCTL_MODE_CLOSEFB) {
 			managarm::fs::GenericIoctlReply resp;
 
 			if (logDrmRequests)
-				std::println("core/drm: RMFB([{}])", req.drm_fb_id());
+				std::println("core/drm: {}([{}])",
+						req.command() == DRM_IOCTL_MODE_RMFB ? "RMFB" : "CLOSEFB",
+						req.drm_fb_id());
 
 			auto obj = self->_device->findObject(req.drm_fb_id());
-			assert(obj);
-			auto fb = obj->asFrameBuffer();
-			assert(fb);
-			self->detachFrameBuffer(fb);
-			resp.set_error(managarm::fs::Errors::SUCCESS);
+			auto fb = obj ? obj->asFrameBuffer() : nullptr;
+			if(!fb || !self->detachFrameBuffer(fb)) {
+				resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+			}else{
+				resp.set_error(managarm::fs::Errors::SUCCESS);
+			}
 
 			auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
 				helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
@@ -927,8 +935,10 @@ struct drm_core::File::HandleIoctl {
 			if (logDrmRequests)
 				std::println("core/drm: DESTROY_DUMB({})", req.drm_handle());
 
-			self->_buffers.erase(req.drm_handle());
-			self->_allocator.free(req.drm_handle());
+			// See the GEM_CLOSE handler: guard the id recycle on the erase actually
+			// having removed a live handle.
+			if(self->_buffers.erase(req.drm_handle()))
+				self->_allocator.free(req.drm_handle());
 
 			managarm::fs::GenericIoctlReply resp;
 
@@ -1468,7 +1478,13 @@ struct drm_core::File::HandleIoctl {
 		if (logDrmRequests)
 			std::println("core/drm: DRM_IOCTL_GEM_CLOSE({})", req.handle());
 
-		self->_buffers.erase(req.handle());
+		// Same teardown as DESTROY_DUMB: dropping the last reference is what runs
+		// ~BufferObject and returns the driver's VRAM. Only recycle the id if the
+		// handle really was live -- freeing an id that was never allocated would let
+		// a later createHandle() hand out a colliding one.
+		if(self->_buffers.erase(req.handle()))
+			self->_allocator.free(req.handle());
+		resp.set_error(managarm::fs::Errors::SUCCESS);
 
 		auto [send_resp] = co_await helix_ng::exchangeMsgs(
 			conversation,

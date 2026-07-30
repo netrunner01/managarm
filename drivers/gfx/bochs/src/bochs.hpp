@@ -132,6 +132,15 @@ public:
 private:
 	protocols::hw::Device _hwDevice;
 	range_allocator _vramAllocator;
+
+	// Diagnostic only, reported on exhaustion. These exist because "out of VRAM" on its
+	// own cannot distinguish a leak from a pool that is legitimately too small: with
+	// 1280x1024x32 rounding to an 8 MiB buddy block, a 16 MiB pool holds exactly two
+	// buffers, so exhaustion is expected even when every free works. `live` is the
+	// number that actually discriminates -- if frees are reaching the driver it stays
+	// small and bounded; if they are not, it climbs monotonically.
+	size_t _vramAllocs = 0;
+	size_t _vramFrees = 0;
 	arch::io_space _operational;
 	bool _claimedDevice;
 };

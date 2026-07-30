@@ -1065,45 +1065,68 @@ struct drm_core::File::HandleIoctl {
 			);
 			HEL_CHECK(send_resp.error());
 			logBragiReply(resp);
-		}else if(req.command() == DRM_IOCTL_MODE_SETPROPERTY) {
+		}else if(req.command() == DRM_IOCTL_MODE_SETPROPERTY
+				|| req.command() == DRM_IOCTL_MODE_OBJ_SETPROPERTY) {
+			// Both entry points land here. libdrm splits them --
+			// drmModeConnectorSetProperty -> DRM_IOCTL_MODE_SETPROPERTY,
+			// drmModeObjectSetProperty -> DRM_IOCTL_MODE_OBJ_SETPROPERTY -- but the
+			// bragi request carries the same three fields either way, and the object
+			// is resolved by id, so the body is shared. kwin uses the object form for
+			// DPMS; without it the output is never enabled.
 			managarm::fs::GenericIoctlReply resp;
 
+			bool objForm = (req.command() == DRM_IOCTL_MODE_OBJ_SETPROPERTY);
+
 			if (logDrmRequests)
-				std::println("core/drm: SETPROPERTY()");
+				std::println("core/drm: {}(obj {}, prop {})",
+						objForm ? "OBJ_SETPROPERTY" : "SETPROPERTY",
+						req.drm_obj_id(), req.drm_property_id());
 
 			std::vector<drm_core::Assignment> assignments;
 
 			auto config = self->_device->createConfiguration();
 			auto state = self->_device->atomicState();
 
+			// The object id, the property id and the value all come straight from the
+			// client, so none of them may be asserted on: an assert in this server
+			// raises a signal that kills gfx_bochs outright, which is DEF-30's failure
+			// mode. These were asserts until P0-06; converting them is part of that
+			// change rather than a drive-by, because the object form is reachable with
+			// arbitrary ids from any DRM client.
 			auto mode_obj = self->_device->findObject(req.drm_obj_id());
-			assert(mode_obj);
-
 			auto prop = self->_device->getProperty(req.drm_property_id());
-			assert(prop);
-			auto value = req.drm_property_value();
-			auto prop_type = prop->propertyType();
 
+			if(!mode_obj || !prop) {
+				resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+			}else{
+				auto value = req.drm_property_value();
+				auto prop_type = prop->propertyType();
 
-			if(std::holds_alternative<IntPropertyType>(prop_type)) {
-				assignments.push_back(Assignment::withInt(mode_obj, prop.get(), value));
-			} else if(std::holds_alternative<EnumPropertyType>(prop_type)) {
-				assignments.push_back(Assignment::withInt(mode_obj, prop.get(), value));
-			} else if(std::holds_alternative<BlobPropertyType>(prop_type)) {
-				auto blob = self->_device->findBlob(value);
-				assignments.push_back(Assignment::withBlob(mode_obj, prop.get(), blob));
-			} else if(std::holds_alternative<ObjectPropertyType>(prop_type)) {
-				auto obj = self->_device->findObject(value);
-				assignments.push_back(Assignment::withModeObj(mode_obj, prop.get(), obj));
+				if(std::holds_alternative<IntPropertyType>(prop_type)) {
+					assignments.push_back(Assignment::withInt(mode_obj, prop.get(), value));
+				} else if(std::holds_alternative<EnumPropertyType>(prop_type)) {
+					assignments.push_back(Assignment::withInt(mode_obj, prop.get(), value));
+				} else if(std::holds_alternative<BlobPropertyType>(prop_type)) {
+					auto blob = self->_device->findBlob(value);
+					assignments.push_back(Assignment::withBlob(mode_obj, prop.get(), blob));
+				} else if(std::holds_alternative<ObjectPropertyType>(prop_type)) {
+					auto obj = self->_device->findObject(value);
+					assignments.push_back(Assignment::withModeObj(mode_obj, prop.get(), obj));
+				}
+
+				// capture() validates the assignment against the property; a client may
+				// legitimately ask for an out-of-range enum value, so this is EINVAL and
+				// not a fault.
+				auto valid = config->capture(assignments, state);
+				if(!valid) {
+					resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+				}else{
+					config->commit(std::move(state));
+					co_await config->waitForCompletion();
+
+					resp.set_error(managarm::fs::Errors::SUCCESS);
+				}
 			}
-
-			auto valid = config->capture(assignments, state);
-			assert(valid);
-
-			config->commit(std::move(state));
-			co_await config->waitForCompletion();
-
-			resp.set_error(managarm::fs::Errors::SUCCESS);
 
 			auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
 				helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})

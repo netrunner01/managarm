@@ -78,6 +78,10 @@ std::unique_ptr<drm_core::AtomicState> drm_core::Device::atomicState() {
  */
 void drm_core::Device::registerBufferObject(std::shared_ptr<drm_core::BufferObject> obj, helix_ng::Credentials creds) {
 	_exportedBufferObjects.insert({creds, obj});
+	// ⚠ DEF-73: this map is inserted into HERE and read by findBufferObject(), and is
+	// NEVER erased anywhere in the tree. It is owned by the Device, so every
+	// PRIME-exported BufferObject -- i.e. every kwin scanout buffer -- is pinned for
+	// the lifetime of the driver process and its VRAM can never be returned.
 }
 
 /**

@@ -823,7 +823,9 @@ struct drm_core::File::HandleIoctl {
 			auto cursor_plane = crtc->cursorPlane();
 
 			if (cursor_plane == nullptr) {
-				resp.set_error(managarm::fs::Errors::NO_BACKING_DEVICE);
+				// DEF-69. Succeed as a no-op rather than failing. See the CURSOR2
+				// handler below for why -- the two must answer identically.
+				resp.set_error(managarm::fs::Errors::SUCCESS);
 				auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
 					helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
 				);
@@ -886,7 +888,32 @@ struct drm_core::File::HandleIoctl {
 			auto cursor_plane = crtc->cursorPlane();
 
 			if(cursor_plane == nullptr) {
-				resp.set_error(managarm::fs::Errors::NO_BACKING_DEVICE);
+				// DEF-69 -- THIS IS WHY THE SCREEN WAS BLACK, and the reasoning
+				// matters because "succeed without doing anything" is normally the
+				// exact anti-pattern this tree is trying to remove.
+				//
+				// There is no cursor plane (bochs, virtio and plainfb all have a
+				// primary plane only), so there is genuinely nothing to program.
+				// Returning NO_BACKING_DEVICE is what Linux does (-ENXIO) and looks
+				// like the honest answer, but it takes the entire desktop down:
+				// kwin's legacy present path calls setCursorLegacy() on every frame,
+				// and on failure DrmPipeline::presentLegacy() returns
+				// InvalidArguments *silently*, before it ever reaches the page flip.
+				// Measured: MODE_CURSOR2 1612 calls, PAGE_FLIP **0** -- not one frame
+				// was ever presented, and kwin only reported the downstream symptom,
+				// "Failed to find a working output layer configuration!".
+				//
+				// We already tell userspace the truth the documented way: GET_CAP
+				// reports DRM_CAP_CURSOR_WIDTH/HEIGHT as 0 when no CRTC has a cursor
+				// plane (see the GET_CAP handler). kwin 6.6.4 asks, is told 0, and
+				// calls this anyway with a real imported buffer -- so that signal is
+				// necessary but not sufficient, and this path has to be survivable.
+				//
+				// Succeeding is also defensible on its own terms: the client asked
+				// for a cursor state we cannot display, and we display no cursor.
+				// Nothing observable is claimed that is not delivered, except the
+				// cursor image itself -- which no answer here could have delivered.
+				resp.set_error(managarm::fs::Errors::SUCCESS);
 
 				auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
 					helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})

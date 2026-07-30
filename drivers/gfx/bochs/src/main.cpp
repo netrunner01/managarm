@@ -208,10 +208,6 @@ GfxDevice::createDumb(uint32_t width, uint32_t height, uint32_t bpp) {
 	}
 	++_vramAllocs;
 	auto offset = *allocation;
-	std::cout << "gfx-bochs: allocated " << width << "x" << height << " buffer at offset "
-			<< (void *)offset << " [allocs=" << _vramAllocs
-			<< " frees=" << _vramFrees
-			<< " live=" << (_vramAllocs - _vramFrees) << "]" << std::endl;
 	auto displacement = alignment - (offset % alignment);
 	if(displacement == alignment)
 		displacement = 0;
@@ -430,14 +426,6 @@ GfxDevice::BufferObject::~BufferObject() {
 	// lands on a different order and corrupts the buddy tree.
 	_device->_vramAllocator.free(_offset, _alignment + _size);
 	++_device->_vramFrees;
-	// Unconditional, and deliberately so while DEF-23/DEF-68 are being verified: the
-	// whole question is whether this destructor runs at all, and buffer creation is
-	// rare enough (single digits per session) that this cannot be a log flood.
-	std::cout << "gfx-bochs: freed buffer at offset " << (void *)_offset
-			<< " [allocs=" << _device->_vramAllocs
-			<< " frees=" << _device->_vramFrees
-			<< " live=" << (_device->_vramAllocs - _device->_vramFrees)
-			<< "]" << std::endl;
 }
 
 std::shared_ptr<drm_core::BufferObject> GfxDevice::BufferObject::sharedBufferObject() {

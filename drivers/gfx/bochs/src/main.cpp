@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <deque>
+#include <bit>
 #include <optional>
 #include <functional>
 #include <iostream>
@@ -33,10 +34,19 @@ namespace {
 // GfxDevice.
 // ----------------------------------------------------------------
 
+// floor(log2(size)) -- the range allocator manages a single 2^order block, so the
+// order must round DOWN or it would hand out offsets past the end of the BAR.
+static unsigned int vramOrderFor(size_t size) {
+	assert(size >= (size_t{1} << 10));
+	return std::bit_width(static_cast<unsigned long long>(size)) - 1;
+}
+
 GfxDevice::GfxDevice(protocols::hw::Device hw_device,
-		helix::UniqueDescriptor video_ram, void *)
+		helix::UniqueDescriptor video_ram, void *, size_t vram_size)
 : _videoRam{std::move(video_ram)}, _hwDevice{std::move(hw_device)},
-		_vramAllocator{24, 10}, _claimedDevice{false} {
+		_vramAllocator{vramOrderFor(vram_size), 10}, _claimedDevice{false} {
+	std::cout << "gfx-bochs: " << (vram_size >> 20) << " MiB of VRAM, managed as 2^"
+			<< vramOrderFor(vram_size) << " bytes" << std::endl;
 	uintptr_t ports[] = { 0x01CE, 0x01CF, 0x01D0 };
 	HelHandle handle;
 	HEL_CHECK(helAccessIo(ports, 3, &handle));
@@ -184,7 +194,17 @@ GfxDevice::createDumb(uint32_t width, uint32_t height, uint32_t bpp) {
 				<< width << "x" << height << " buffer."
 				" Computed pixel pitch: " << best_ppitch << std::endl;
 
-	auto offset = _vramAllocator.allocate(alignment + size);
+	// try_ rather than the asserting form: the request size follows the client's
+	// requested mode, so exhaustion is reachable from userspace and must not take the
+	// driver down with it (DEF-30).
+	auto allocation = _vramAllocator.try_allocate(alignment + size);
+	if(!allocation) {
+		std::cout << "gfx-bochs: out of VRAM for a " << width << "x" << height
+				<< "x" << bpp << " buffer (needed " << (alignment + size)
+				<< " bytes); refusing the allocation" << std::endl;
+		return std::make_pair(nullptr, 0);
+	}
+	auto offset = *allocation;
 	auto displacement = alignment - (offset % alignment);
 	if(displacement == alignment)
 		displacement = 0;
@@ -397,6 +417,13 @@ GfxDevice::BufferObject::BufferObject(GfxDevice *device, size_t alignment, size_
 	_memoryView = helix::UniqueDescriptor{handle};
 };
 
+GfxDevice::BufferObject::~BufferObject() {
+	// Must mirror the allocate() call in createDumb() exactly -- it requests
+	// `alignment + size`, so the free has to pass the same value or round_order()
+	// lands on a different order and corrupts the buddy tree.
+	_device->_vramAllocator.free(_offset, _alignment + _size);
+}
+
 std::shared_ptr<drm_core::BufferObject> GfxDevice::BufferObject::sharedBufferObject() {
 	return this->shared_from_this();
 }
@@ -441,7 +468,7 @@ async::detached bindController(mbus_ng::Entity entity) {
 			&actual_pointer));
 
 	auto gfxDevice = std::make_shared<GfxDevice>(std::move(pci_device),
-			std::move(bar), actual_pointer);
+			std::move(bar), actual_pointer, info.barInfo[0].length);
 
 	auto config = co_await gfxDevice->initialize();
 

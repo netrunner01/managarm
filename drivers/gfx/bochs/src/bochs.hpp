@@ -40,6 +40,12 @@ struct GfxDevice final : drm_core::Device, std::enable_shared_from_this<GfxDevic
 		BufferObject(GfxDevice *device, size_t alignment, size_t size,
 				uintptr_t offset, ptrdiff_t displacement, uint32_t width, uint32_t height);
 
+		// Returns this buffer's range to the VRAM allocator. Without it VRAM is never
+		// reclaimed and the pool is a bump allocator in practice -- which is DEF-30:
+		// a 1280x1024x32 buffer costs an 8 MiB buddy block out of a 16 MiB pool, so
+		// the third one ever created killed the driver.
+		~BufferObject();
+
 		std::shared_ptr<drm_core::BufferObject> sharedBufferObject() override;
 		size_t getSize() override;
 		std::pair<helix::BorrowedDescriptor, uint64_t> getMemory() override;
@@ -94,8 +100,11 @@ struct GfxDevice final : drm_core::Device, std::enable_shared_from_this<GfxDevic
 		uint32_t _pixelPitch;
 	};
 
+	// vram_size comes from the PCI BAR. It used to be assumed to be 16 MiB, which
+	// happened to match QEMU's default but silently wasted (or over-committed) VRAM on
+	// anything else.
 	GfxDevice(protocols::hw::Device hw_device,
-			helix::UniqueDescriptor video_ram, void* frame_buffer);
+			helix::UniqueDescriptor video_ram, void* frame_buffer, size_t vram_size);
 
 	async::result<std::unique_ptr<drm_core::Configuration>> initialize();
 	std::unique_ptr<drm_core::Configuration> createConfiguration() override;

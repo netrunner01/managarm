@@ -433,19 +433,29 @@ struct drm_core::File::HandleIoctl {
 			managarm::fs::GenericIoctlReply resp;
 
 			auto pair = self->_device->createDumb(req.drm_width(), req.drm_height(), req.drm_bpp());
-			auto handle = self->createHandle(pair.first);
-			resp.set_drm_handle(handle);
+			// A driver may legitimately run out of VRAM; it returns a null buffer
+			// rather than faulting (DEF-30). Report it instead of dereferencing.
+			if(!pair.first) {
+				resp.set_error(managarm::fs::Errors::NO_SPACE_LEFT);
 
-			resp.set_drm_pitch(pair.second);
-			resp.set_drm_size(pair.first->getSize());
-			resp.set_error(managarm::fs::Errors::SUCCESS);
+				if (logDrmRequests)
+					std::println("core/drm: CREATE_DUMB({}x{}) -> out of memory",
+						req.drm_width(), req.drm_height());
+			}else{
+				auto handle = self->createHandle(pair.first);
+				resp.set_drm_handle(handle);
 
-			if (logDrmRequests)
-				std::println("core/drm: CREATE_DUMB({}x{}) -> <{}>",
-					req.drm_width(),
-					req.drm_height(),
-					resp.drm_handle()
-				);
+				resp.set_drm_pitch(pair.second);
+				resp.set_drm_size(pair.first->getSize());
+				resp.set_error(managarm::fs::Errors::SUCCESS);
+
+				if (logDrmRequests)
+					std::println("core/drm: CREATE_DUMB({}x{}) -> <{}>",
+						req.drm_width(),
+						req.drm_height(),
+						resp.drm_handle()
+					);
+			}
 
 			auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
 				helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})

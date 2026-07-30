@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <optional>
 #include <set>
 
 struct range_allocator {
@@ -40,15 +41,21 @@ public:
 		_nodes.insert(node{0, order});
 	}
 
-	uint64_t allocate(size_t size) {
-		return allocate_order(std::max(_granularity, round_order(size)));
+	// Exhaustion is a normal condition, not a programming error: the pool is finite
+	// and the request sizes are driven by clients. Prefer the try_ forms anywhere a
+	// client can influence the size -- an assert in a driver raises a signal that
+	// kills the whole server (this is DEF-30: gfx_bochs died on exactly that path).
+	std::optional<uint64_t> try_allocate(size_t size) {
+		return try_allocate_order(std::max(_granularity, round_order(size)));
 	}
 
-	uint64_t allocate_order(unsigned int order) {
-		assert(order >= _granularity);
+	std::optional<uint64_t> try_allocate_order(unsigned int order) {
+		if(order < _granularity)
+			return std::nullopt;
 
 		auto it = _nodes.lower_bound(node{0, order});
-		assert(it != _nodes.end());
+		if(it == _nodes.end())
+			return std::nullopt;
 
 		auto offset = it->off;
 
@@ -65,10 +72,33 @@ public:
 		return offset;
 	}
 
+	// Asserting wrappers, kept for callers that genuinely cannot fail. These share
+	// the implementation above so the two cannot drift apart.
+	uint64_t allocate(size_t size) {
+		return allocate_order(std::max(_granularity, round_order(size)));
+	}
+
+	uint64_t allocate_order(unsigned int order) {
+		assert(order >= _granularity);
+		auto offset = try_allocate_order(order);
+		assert(offset);
+		return *offset;
+	}
+
+	// The size passed here MUST be the same one passed to allocate(), not the
+	// caller's logical object size -- round_order() has to land on the same order or
+	// the buddy tree is corrupted.
 	void free(uint64_t offset, size_t size) {
 		return free_order(offset, std::max(_granularity, round_order(size)));
 	}
 
+	// NOTE: buddies are not coalesced. A freed block returns to the pool at its own
+	// order and is never merged back into a larger one, so a workload that allocates
+	// and frees a mix of sizes fragments monotonically and can fail to satisfy a
+	// large request while holding ample total free space. Same-size churn -- the
+	// common case here, since buffers track the display mode -- reuses cleanly and is
+	// unaffected. Left as-is deliberately: coalescing needs a buddy lookup this
+	// structure does not support, and no current workload needs it.
 	void free_order(uint64_t offset, unsigned int order) {
 		assert(order >= _granularity);
 

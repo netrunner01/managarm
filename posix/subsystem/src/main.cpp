@@ -1,5 +1,6 @@
 #include <memory>
 
+#include <signal.h>
 #include <linux/vt.h>
 
 #include <protocols/mbus/client.hpp>
@@ -72,6 +73,17 @@ async::result<void> serveSignals(std::shared_ptr<Process> self,
 		sequence = std::get<0>(result);
 		//std::cout << "Calling helInterruptThread on " << self->pid() << std::endl;
 		HEL_CHECK(helInterruptThread(thread.getHandle()));
+
+		// SIGKILL is unmaskable and unconditionally fatal. A thread blocked in a killable but
+		// interrupt-proof operation will not observe the interrupt above (DEF-17), so the
+		// cooperative deliver->observe->raise->terminate path never runs. Force-terminate the
+		// thread directly (helKillThread raises condition::terminate, which such a block honours);
+		// the resulting out-of-band death is turned into a proper process teardown by
+		// observeThread()'s kHelErrThreadTerminated path.
+		auto [signalSeq, activeSignals] = self->checkSignal();
+		(void)signalSeq;
+		if(activeSignals & (UINT64_C(1) << (SIGKILL - 1)))
+			HEL_CHECK(helKillThread(thread.getHandle()));
 	}
 
 	if(logCleanup)

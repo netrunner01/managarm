@@ -497,12 +497,14 @@ void Thread::unblockOther(smarter::borrowed_ptr<Thread> thread) {
 	Scheduler::resume(thread.get());
 }
 
-void Thread::killOther(smarter::borrowed_ptr<Thread>) {
-	// TODO: This function is a no-op.
-	//       We only transition to kRunTerminate when all runnable references
-	//       to this thread have been dropped.
-	//       This is necessary to ensure that WQs can be drained etc.
-	//       Remove or rework this function in the future.
+void Thread::killOther(smarter::borrowed_ptr<Thread> thread) {
+	// Force-terminate: raise condition::terminate. Unlike condition::interrupt (used to deliver
+	// ordinary signals), terminate dislodges a thread blocked in a *killable* operation -- one whose
+	// unblockConditions include terminate but not interrupt, which is the common case. This is how
+	// a SIGKILL'd process whose thread is blocked interrupt-proof is actually reaped (DEF-17). The
+	// thread self-terminates via terminateCurrent_() at its next kernel exit, exactly as it would if
+	// its last handle had been dropped (dispose()).
+	thread->raiseCondition_(condition::terminate);
 }
 
 void Thread::interruptOther(smarter::borrowed_ptr<Thread> thread) {

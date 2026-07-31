@@ -95,9 +95,18 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				helix::Dispatcher::global());
 		co_await submit.async_wait();
 
-		// Usually, we should terminate via the generation->inTermination check above.
+		// The thread died out-of-band: normally we tear down via the generation->inTermination
+		// check above (driven by terminate()), but a SIGKILL to a thread blocked interrupt-proof is
+		// reaped by force-terminating it from serveSignals (DEF-17). In that case the observation
+		// completes with kHelErrThreadTerminated and we still owe the process the normal teardown
+		// bookkeeping -- otherwise the serve coroutines never exit and the Process is never reaped.
 		if(observe.error() == kHelErrThreadTerminated) {
-			std::cout << "\e[31m" "posix: Thread terminated unexpectedly" "\e[39m" << std::endl;
+			if(!generation->inTermination) {
+				bool lastInGroup = false;
+				co_await self->terminate(&lastInGroup);
+				if(lastInGroup)
+					co_await self->threadGroup()->terminateGroup(TerminationBySignal{SIGKILL});
+			}
 			co_return;
 		}
 

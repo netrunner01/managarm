@@ -223,10 +223,18 @@ void drm_core::File::_retirePageFlip(uint64_t cookie, uint32_t crtc_id) {
 	postEvent(event);
 }
 
-drm_core::PrimeFile::PrimeFile(helix::BorrowedDescriptor handle, size_t size)
-: size(size) {
+drm_core::PrimeFile::PrimeFile(std::shared_ptr<Device> device, helix_ng::Credentials creds,
+		helix::BorrowedDescriptor handle, size_t size)
+: _device{std::move(device)}, _creds{creds}, size(size) {
 	_memory = std::move(handle);
 };
+
+drm_core::PrimeFile::~PrimeFile() {
+	// The PRIME fd is gone, so the exported buffer no longer needs to be kept alive by
+	// the Device's map. Dropping it here returns the VRAM once no handle still refers
+	// to the buffer (DEF-73).
+	_device->unregisterBufferObject(_creds);
+}
 
 async::result<helix::BorrowedDescriptor>
 drm_core::PrimeFile::accessMemory(void *object) {

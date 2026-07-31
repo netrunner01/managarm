@@ -117,6 +117,7 @@ protected:
 public:
 	void registerBufferObject(std::shared_ptr<drm_core::BufferObject> obj, helix_ng::Credentials creds);
 	std::shared_ptr<drm_core::BufferObject> findBufferObject(helix_ng::Credentials creds);
+	void unregisterBufferObject(helix_ng::Credentials creds);
 
 	id_allocator<uint32_t> allocator;
 

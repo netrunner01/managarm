@@ -131,7 +131,12 @@ private:
 };
 
 struct PrimeFile {
-	PrimeFile(helix::BorrowedDescriptor handle, size_t size);
+	PrimeFile(std::shared_ptr<Device> device, helix_ng::Credentials creds,
+			helix::BorrowedDescriptor handle, size_t size);
+	// Drops this export from the Device's map (DEF-73). ~PrimeFile runs when the PRIME
+	// fd closes: its lane shuts down, servePassthrough returns and releases the last
+	// PrimeFile reference.
+	~PrimeFile();
 
 	static async::result<helix::BorrowedDescriptor> accessMemory(void *object);
 
@@ -141,6 +146,10 @@ struct PrimeFile {
 	static async::result<frg::expected<protocols::fs::Error, protocols::fs::PollStatusResult>> pollStatus(void *object);
 	static async::result<frg::expected<protocols::fs::Error, protocols::fs::PollWaitResult>> pollWait(void *object, uint64_t sequence, int mask, async::cancellation_token cancellation);
 
+	// _device outlives every PrimeFile (it is the driver's device), so a shared_ptr is
+	// safe and creates no cycle; _creds is the key this export was registered under.
+	std::shared_ptr<Device> _device;
+	helix_ng::Credentials _creds;
 	helix::BorrowedDescriptor _memory;
 
 	size_t offset;

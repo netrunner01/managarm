@@ -77,11 +77,12 @@ std::unique_ptr<drm_core::AtomicState> drm_core::Device::atomicState() {
  * Adds a (credentials, BufferObject) pair to the list of exported BOs for this device
  */
 void drm_core::Device::registerBufferObject(std::shared_ptr<drm_core::BufferObject> obj, helix_ng::Credentials creds) {
+	// This strong reference is what keeps a PRIME-exported buffer alive while its
+	// export fd is open (the PrimeFile itself only borrows the memory). It is dropped
+	// again in unregisterBufferObject(), which ~PrimeFile calls when that fd closes
+	// (DEF-73) -- without which every exported scanout buffer leaked for the driver's
+	// lifetime.
 	_exportedBufferObjects.insert({creds, obj});
-	// ⚠ DEF-73: this map is inserted into HERE and read by findBufferObject(), and is
-	// NEVER erased anywhere in the tree. It is owned by the Device, so every
-	// PRIME-exported BufferObject -- i.e. every kwin scanout buffer -- is pinned for
-	// the lifetime of the driver process and its VRAM can never be returned.
 }
 
 /**
@@ -92,6 +93,15 @@ std::shared_ptr<drm_core::BufferObject> drm_core::Device::findBufferObject(helix
 	if(it == _exportedBufferObjects.end())
 		return nullptr;
 	return it->second;
+}
+
+/**
+ * Drops the export registered under these credentials. Called from ~PrimeFile when the
+ * PRIME fd is closed, so the exported BufferObject's VRAM is returned once nothing else
+ * references it (DEF-73).
+ */
+void drm_core::Device::unregisterBufferObject(helix_ng::Credentials creds) {
+	_exportedBufferObjects.erase(creds);
 }
 
 uint64_t drm_core::Device::installMapping(drm_core::BufferObject *bo) {

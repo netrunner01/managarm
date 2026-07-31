@@ -1403,7 +1403,16 @@ struct drm_core::File::HandleIoctl {
 			// Create the lane used for serving the PRIME fd
 			helix::UniqueLane local_lane, remote_lane;
 			std::tie(local_lane, remote_lane) = helix::createStream(true);
-			auto file = smarter::make_shared<drm_core::PrimeFile>(bo->getMemory().first, bo->getSize());
+
+			// The export is keyed by the credentials of the PRIME fd's lane. Compute it
+			// up front so PrimeFile can hold it and ~PrimeFile can unregister the export
+			// (DEF-73) -- and so the fd cannot close before the key is recorded.
+			char creds_data[16];
+			HEL_CHECK(helGetCredentials(remote_lane.getHandle(), 0, creds_data));
+			helix_ng::Credentials creds{{creds_data}};
+
+			auto file = smarter::make_shared<drm_core::PrimeFile>(self->_device, creds,
+					bo->getMemory().first, bo->getSize());
 
 			// Start serving the file
 			async::detach(protocols::fs::servePassthrough(
@@ -1431,11 +1440,8 @@ struct drm_core::File::HandleIoctl {
 			posix_resp.ParseFromArray(recv_resp.data(), recv_resp.length());
 			recv_resp.reset();
 
-			char creds_data[16];
-			// 'export' the object so that we can locate it from other threads, too
-			HEL_CHECK(helGetCredentials(remote_lane.getHandle(), 0, creds_data));
-			helix_ng::Credentials creds{{creds_data}};
-
+			// 'export' the object so it can be located from other threads, keyed by the
+			// same creds PrimeFile holds for its cleanup.
 			if(self->exportBufferObject(req.drm_prime_handle(), creds)) {
 				resp.set_error(managarm::fs::Errors::SUCCESS);
 				resp.set_drm_prime_fd(posix_resp.fd());

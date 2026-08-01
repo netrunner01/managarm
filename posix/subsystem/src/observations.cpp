@@ -86,6 +86,17 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 		std::shared_ptr<Generation> generation) {
 	auto thread = self->threadDescriptor();
 
+	// serveSignals may force-terminate the observed thread (SIGKILL) concurrently, at any point
+	// between our helLoadRegisters and the resume below. Resuming a thread that has already exited
+	// is a harmless no-op, not an error worth panicking over during teardown (DEF-17): helResume
+	// returns kHelErrThreadTerminated in that case (thor: Thread::resumeOther -> Error::threadExited).
+	// Tolerate exactly that; any other error is still a real bug and is checked.
+	auto resumeObserved = [&] {
+		auto error = helResume(thread.getHandle());
+		if(error != kHelErrThreadTerminated)
+			HEL_CHECK(error);
+	};
+
 	while(true) {
 		if(generation->inTermination)
 			break;
@@ -136,7 +147,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			gprs[kHelRegError] = kHelErrNone;
 			gprs[kHelRegOut0] = reinterpret_cast<uintptr_t>(address);
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superAnonDeallocate) {
 			uintptr_t gprs[kHelNumGprs];
 			HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
@@ -146,7 +157,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			gprs[kHelRegError] = kHelErrNone;
 			gprs[kHelRegOut0] = 0;
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superGetProcessData) {
 			posix::ManagarmProcessData data = {
 				self->clientPosixLane(),
@@ -165,7 +176,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			HEL_CHECK(storeData.error());
 			gprs[kHelRegError] = kHelErrNone;
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superFork) {
 			if(logRequests)
 				std::cout << "posix: fork supercall" << std::endl;
@@ -189,7 +200,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			gprs[kHelRegOut0] = 0;
 			HEL_CHECK(helStoreRegisters(new_thread, kHelRegsGeneral, &gprs));
 
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 			HEL_CHECK(helResume(new_thread));
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superClone) {
 			if(logRequests)
@@ -221,7 +232,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			}
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
 
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 			if (newThread != kHelNullHandle)
 				HEL_CHECK(helResume(newThread));
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superExecve) {
@@ -283,13 +294,13 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				gprs[kHelRegOut0] = ENOENT;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
 
-				HEL_CHECK(helResume(thread.getHandle()));
+				resumeObserved();
 			}else if(error == Error::badExecutable || error == Error::eof) {
 				gprs[kHelRegError] = kHelErrNone;
 				gprs[kHelRegOut0] = ENOEXEC;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
 
-				HEL_CHECK(helResume(thread.getHandle()));
+				resumeObserved();
 			}else {
 				// Unhandled error, log and bubble up EIO
 				std::cout << "posix: exec: unhandled error from Process::exec, we got: " << (int)error << std::endl;
@@ -297,7 +308,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				gprs[kHelRegOut0] = EIO;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
 
-				HEL_CHECK(helResume(thread.getHandle()));
+				resumeObserved();
 			}
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superExit) {
 			if(logRequests)
@@ -351,7 +362,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			if (!co_await handlePendingSignalsFromObservation(self.get()))
 				break;
 
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigRaise) {
 			if(logRequests || logSignals)
 				std::cout << "posix: SIG_RAISE supercall" << std::endl;
@@ -378,7 +389,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 
 			if(killed)
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigRestore) {
 			if(logRequests || logSignals)
 				std::cout << "posix: SIG_RESTORE supercall" << std::endl;
@@ -388,7 +399,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			if (!co_await handlePendingSignalsFromObservation(self.get()))
 				break;
 
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigKill) {
 			if(logRequests || logSignals)
 				std::cout << "posix: SIG_KILL supercall" << std::endl;
@@ -403,7 +414,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			if (mode != posix::SuperKillMode::Kill && mode != posix::SuperKillMode::QueueInfo) {
 				gprs[kHelRegOut0] = EINVAL;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-				HEL_CHECK(helResume(thread.getHandle()));
+				resumeObserved();
 				continue;
 			}
 
@@ -433,7 +444,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 					if (info.si_code >= 0 || info.si_code == SI_TKILL) {
 						gprs[kHelRegOut0] = EPERM;
 						HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-						HEL_CHECK(helResume(thread.getHandle()));
+						resumeObserved();
 						continue;
 					}
 				}
@@ -454,7 +465,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			if(sn < 0 || sn > 64) {
 				gprs[kHelRegOut0] = EINVAL;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-				HEL_CHECK(helResume(thread.getHandle()));
+				resumeObserved();
 				continue;
 			}
 
@@ -469,21 +480,21 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				if (!targetProcessGroup) {
 					gprs[kHelRegOut0] = ESRCH;
 					HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-					HEL_CHECK(helResume(thread.getHandle()));
+					resumeObserved();
 					continue;
 				}
 			} else if (tgid == -1) {
 				std::println("posix: SIG_KILL(-1) is ignored!");
 				gprs[kHelRegOut0] = EPERM;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-				HEL_CHECK(helResume(thread.getHandle()));
+				resumeObserved();
 				continue;
 			} else if (tgid > 0) {
 				targetThreadGroup = ThreadGroup::findThreadGroup(tgid);
 				if (!targetThreadGroup) {
 					gprs[kHelRegOut0] = ESRCH;
 					HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-					HEL_CHECK(helResume(thread.getHandle()));
+					resumeObserved();
 					continue;
 				}
 
@@ -492,7 +503,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 					if (!targetThread) {
 						gprs[kHelRegOut0] = ESRCH;
 						HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-						HEL_CHECK(helResume(thread.getHandle()));
+						resumeObserved();
 						continue;
 					}
 				}
@@ -503,7 +514,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				if (!targetProcessGroup) {
 					gprs[kHelRegOut0] = ESRCH;
 					HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-					HEL_CHECK(helResume(thread.getHandle()));
+					resumeObserved();
 					continue;
 				}
 			}
@@ -524,7 +535,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			if (!co_await handlePendingSignalsFromObservation(self.get()))
 				break;
 
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigAltStack) {
 			// sigaltstack is implemented as a supercall because it
 			// needs to access the thread's registers.
@@ -574,7 +585,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			gprs[kHelRegError] = 0;
 			gprs[kHelRegOut0] = error;
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigSuspend) {
 			if(logRequests || logSignals)
 				std::cout << "posix: SIGSUSPEND supercall" << std::endl;
@@ -597,7 +608,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			if (!co_await handlePendingSignalsFromObservation(self.get()))
 				break;
 
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superGetTid){
 			if(logRequests)
 				std::cout << "posix: GET_TID supercall" << std::endl;
@@ -608,7 +619,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			gprs[kHelRegError] = 0;
 			gprs[kHelRegOut0] = self->tid();
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigGetPending) {
 			if(logRequests)
 				std::cout << "posix: SIG_GET_PENDING supercall" << std::endl;
@@ -620,7 +631,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			auto [_, active] = self->checkSignal();
 			gprs[kHelRegOut0] = active & self->signalMask();
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superSigTimedWait) {
 			if(logRequests)
 				std::cout << "posix: SIG_TIMED_WAIT supercall" << std::endl;
@@ -685,7 +696,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			}
 
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveSuperCall + posix::superCancel) {
 			uintptr_t gprs[kHelNumGprs];
 			HEL_CHECK(helLoadRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
@@ -698,7 +709,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			gprs[kHelRegError] = 0;
 
 			HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveInterrupt) {
 			// std::println("Process {} ({}) was interrupted forceTermination={}", self->name(), self->pid(), self->forceTermination);
 			if (self->forceTermination) {
@@ -708,7 +719,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 
 			if (!co_await handlePendingSignalsFromObservation(self.get()))
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObservePanic) {
 			printf("\e[35mposix: User space panic in process %s\e[39m\n", self->path().c_str());
 			fflush(stdout);
@@ -722,7 +733,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			co_await self->threadGroup()->signalContext()->determineAndRaiseContext(item, self.get(), killed);
 			if(killed)
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveBreakpoint) {
 			printf("\e[35mposix: Breakpoint in process %s\n", self->path().c_str());
 			self->dumpRegisters();
@@ -758,7 +769,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			co_await self->threadGroup()->signalContext()->determineAndRaiseContext(item, self.get(), killed);
 			if(killed)
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveGeneralFault) {
 			printf("\e[31mposix: General fault in process %s\e[39m\n", self->path().c_str());
 			fflush(stdout);
@@ -772,7 +783,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			co_await self->threadGroup()->signalContext()->determineAndRaiseContext(item, self.get(), killed);
 			if(killed)
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveIllegalInstruction) {
 			printf("\e[31mposix: Illegal instruction in process %s\e[39m\n", self->path().c_str());
 			fflush(stdout);
@@ -791,7 +802,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 				}
 				break;
 			}
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else if(observe.observation() == kHelObserveDivByZero) {
 			printf("\e[31mposix: Divide by zero in process %s\e[39m\n", self->path().c_str());
 			fflush(stdout);
@@ -805,7 +816,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			co_await self->threadGroup()->signalContext()->determineAndRaiseContext(item, self.get(), killed);
 			if(killed)
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}else{
 			printf("\e[31mposix: Unexpected observation in process %s\e[39m\n", self->path().c_str());
 			fflush(stdout);
@@ -819,7 +830,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			co_await self->threadGroup()->signalContext()->determineAndRaiseContext(item, self.get(), killed);
 			if(killed)
 				break;
-			HEL_CHECK(helResume(thread.getHandle()));
+			resumeObserved();
 		}
 	}
 }

@@ -231,7 +231,7 @@ HandleRequest::operator()(managarm::posix::CloseRequest &&req,
 async::result<std::expected<void, DispatchError>>
 HandleRequest::operator()(managarm::posix::EpollCallRequest &&req,
 		helix::BorrowedDescriptor conversation, bragi::preamble preamble,
-		std::shared_ptr<Process> self, std::shared_ptr<Generation>) {
+		std::shared_ptr<Process> self, std::shared_ptr<Generation> generation) {
 	auto tailRes = co_await dispatchTail(req, conversation, preamble);
 	if(!tailRes) {
 		std::cout << "posix: Rejecting request due to decoding failure" << std::endl;
@@ -349,8 +349,19 @@ HandleRequest::operator()(managarm::posix::EpollCallRequest &&req,
 			}),
 			async::lambda([&](auto c) -> async::result<void> {
 				k = co_await epoll::wait(epfile.get(), events, 16, c);
+			}),
+			// Process teardown (DEF-17): an infinite poll must unblock when the serve generation is
+			// cancelled, otherwise serveRequests hangs here inline, generation->requestsDone never
+			// fires and Process::terminate() never completes -- so a SIGKILL'd process blocked in
+			// poll is never reaped.
+			async::lambda([&](auto c) -> async::result<void> {
+				co_await async::suspend_indefinitely(c, generation->cancelServe);
 			})
 		);
+		// If the generation was cancelled (teardown), the client is gone and its lane is being shut
+		// down; return without replying so serveRequests can observe the shutdown and quiesce.
+		if(async::cancellation_token{generation->cancelServe}.is_cancellation_requested())
+			co_return {};
 	}else if(!timeout) {
 		// Do not bother to set up a timer for zero timeouts.
 		async::cancellation_event cancel_wait;

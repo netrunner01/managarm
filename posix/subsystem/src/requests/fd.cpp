@@ -483,7 +483,7 @@ HandleRequest::operator()(managarm::posix::EpollCtlRequest &&req,
 async::result<std::expected<void, DispatchError>>
 HandleRequest::operator()(managarm::posix::EpollWaitRequest &&req,
 		helix::BorrowedDescriptor conversation, bragi::preamble preamble,
-		std::shared_ptr<Process> self, std::shared_ptr<Generation>) {
+		std::shared_ptr<Process> self, std::shared_ptr<Generation> generation) {
 	id = preamble.id();
 	logBragiRequest(req);
 	logRequest(logRequests, self, "EPOLL_WAIT", "epollfd={}", req.fd());
@@ -503,8 +503,18 @@ HandleRequest::operator()(managarm::posix::EpollWaitRequest &&req,
 	struct epoll_event events[16];
 	size_t k;
 	if(req.timeout() < 0) {
+		// An infinite epoll_wait must still be cancellable by the serve generation: otherwise, when
+		// the process is torn down (Process::terminate() -> cancelServe.cancel()), serveRequests is
+		// stuck here inline, generation->requestsDone never fires and terminate() hangs forever -- so
+		// a SIGKILL'd process blocked in epoll_pwait is never reaped (DEF-17).
+		async::cancellation_token cancellation = generation->cancelServe;
 		k = co_await epoll::wait(epfile.get(), events,
-				std::min(req.size(), uint32_t(16)));
+				std::min(req.size(), uint32_t(16)), cancellation);
+		// The generation was cancelled: the client is gone and its lane is being shut down. Do not
+		// reply (the lane would reject it); returning lets serveRequests observe DispatchError::shutdown
+		// and raise requestsDone so terminate() can complete.
+		if(cancellation.is_cancellation_requested())
+			co_return {};
 	}else if(!req.timeout()) {
 		// Do not bother to set up a timer for zero timeouts.
 		async::cancellation_event cancel_wait;

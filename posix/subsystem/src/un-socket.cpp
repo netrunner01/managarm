@@ -140,6 +140,17 @@ public:
 			abstractSocketsBindMap.erase(_sockpath);
 		}
 
+		// Pathname sockets are registered in globalBindMap by their FS node. The
+		// registry holds a raw OpenFile *, so the entry MUST be removed before this
+		// OpenFile is destroyed -- otherwise a later connect()/sendMsg() that resolves
+		// the same node dereferences freed memory (this mirrors Linux's
+		// unix_remove_socket() on release). Inherited (accepted) sockets copy
+		// _nameType/_sockpath from the listener but are never inserted, so they must
+		// not erase; erasing by value (== this) enforces that and also protects a
+		// socket whose bind() failed after _nameType was already set.
+		if(!_isInherited && _nameType == NameType::path)
+			std::erase_if(globalBindMap, [this](const auto &e) { return e.second == this; });
+
 		if(_currentState == State::connected) {
 			auto rf = _remote;
 			if(logSockets)
@@ -438,7 +449,10 @@ public:
 
 					// Lookup the socket associated with the node.
 					auto node = resolver.currentLink()->getTarget();
-					remote = globalBindMap.at(node);
+					auto nodeEntry = globalBindMap.find(node);
+					if(nodeEntry == globalBindMap.end())
+						co_return protocols::fs::Error::connectionRefused;
+					remote = nodeEntry->second;
 				}
 
 			}
@@ -699,7 +713,10 @@ public:
 
 			// Lookup the socket associated with the node.
 			auto node = resolver.currentLink()->getTarget();
-			auto server = globalBindMap.at(node);
+			auto nodeEntry = globalBindMap.find(node);
+			if(nodeEntry == globalBindMap.end())
+				co_return protocols::fs::Error::connectionRefused;
+			auto server = nodeEntry->second;
 			if(socktype_ == SOCK_STREAM) {
 				server->_acceptQueue.push_back(this);
 				server->_inSeq = ++server->_currentSeq;

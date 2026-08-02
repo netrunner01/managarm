@@ -8,7 +8,7 @@ namespace requests {
 async::result<std::expected<void, DispatchError>>
 HandleRequest::operator()(managarm::posix::WaitIdRequest &&req,
 		helix::BorrowedDescriptor conversation, bragi::preamble preamble,
-		std::shared_ptr<Process> self, std::shared_ptr<Generation>) {
+		std::shared_ptr<Process> self, std::shared_ptr<Generation> generation) {
 	id = preamble.id();
 	logBragiRequest(req);
 
@@ -60,7 +60,15 @@ HandleRequest::operator()(managarm::posix::WaitIdRequest &&req,
 
 	logRequest(logRequests, self, "WAIT_ID", "pid={}", wait_pid);
 
-	auto wait_result = co_await self->wait(wait_pid, flags, {});
+	auto wait_result = co_await self->wait(wait_pid, flags, generation->cancelServe);
+
+	// Process teardown (DEF-17): the only cancellation token we pass to wait() is the serve
+	// generation's cancelServe, so an `interrupted` result means the generation was cancelled --
+	// the client is gone and its lane is being shut down. Return without replying so serveRequests
+	// can observe the shutdown and raise requestsDone; otherwise a SIGKILL'd process blocked in
+	// waitid(-1) (e.g. pid1, DEF-79) is never reaped.
+	if(!wait_result && wait_result.error() == Error::interrupted)
+		co_return {};
 
 	managarm::posix::WaitIdResponse resp;
 

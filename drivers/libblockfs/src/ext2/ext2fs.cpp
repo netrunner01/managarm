@@ -310,7 +310,11 @@ Inode::insertEntry(std::string name, int64_t ino, blockfs::FileType type) {
 	{
 		co_await blockMapMutex.async_lock();
 		frg::unique_lock blockMapLock{frg::adopt_lock, blockMapMutex};
-		co_await fs.assignDataBlocks(this, blockOffset, 1);
+		// TODO(DEF-32): this directory-growth path returns a bare DirEntry and has
+		// no client error channel, so a full disk still aborts here. Narrower than
+		// the data-write path, which now returns -ENOSPC.
+		auto assignResult = co_await fs.assignDataBlocks(this, blockOffset, 1);
+		assert(assignResult && "Out of disk space");
 	}
 
 	auto resizeResult = co_await helix_ng::resizeMemory(
@@ -571,7 +575,8 @@ async::result<std::expected<DirEntry, protocols::fs::Error>> Inode::mkdir(std::s
 	{
 		co_await dirNode->blockMapMutex.async_lock();
 		frg::unique_lock dirNodeBlockMapLock{frg::adopt_lock, dirNode->blockMapMutex};
-		co_await fs.assignDataBlocks(dirNode.get(), 0, 1);
+		if(auto e = co_await fs.assignDataBlocks(dirNode.get(), 0, 1); !e)
+			co_return std::unexpected{e.error()};
 	}
 
 	dirNode->setFileSize(fs.blockSize);
@@ -665,7 +670,8 @@ async::result<std::expected<DirEntry, protocols::fs::Error>> Inode::symlink(std:
 		{
 			co_await newNode->blockMapMutex.async_lock();
 			frg::unique_lock newNodeBlockMapLock{frg::adopt_lock, newNode->blockMapMutex};
-			co_await fs.assignDataBlocks(newNode.get(), 0, numBlocks);
+			if(auto e = co_await fs.assignDataBlocks(newNode.get(), 0, numBlocks); !e)
+				co_return std::unexpected{e.error()};
 		}
 
 		auto newSize = (target.size() + 0xFFF) & ~size_t(0xFFF);
@@ -781,7 +787,7 @@ Inode::ensureBackingBlocks(size_t offset, size_t length) {
 	{
 		co_await blockMapMutex.async_lock();
 		frg::unique_lock blockMapLock{frg::adopt_lock, blockMapMutex};
-		co_await fs.assignDataBlocks(this, blockOffset, blockCount);
+		FRG_CO_TRY(co_await fs.assignDataBlocks(this, blockOffset, blockCount));
 	}
 
 	co_return frg::success;
@@ -1377,7 +1383,12 @@ async::detached FileSystem::manageFileData(std::shared_ptr<Inode> inode) {
 			{
 				co_await inode->blockMapMutex.async_lock();
 				frg::unique_lock blockMapLock{frg::adopt_lock, inode->blockMapMutex};
-				co_await inode->fs.assignDataBlocks(inode.get(), blockOffset, numBlocks);
+				// TODO(DEF-32): mmap writeback is a background coroutine with no client
+				// error channel, so a full disk still aborts here. In practice blocks are
+				// reserved earlier via ensureBackingBlocks(), which now returns -ENOSPC
+				// before writeback runs, so this is rarely reached on the write() path.
+				auto assignResult = co_await inode->fs.assignDataBlocks(inode.get(), blockOffset, numBlocks);
+				assert(assignResult && "Out of disk space");
 				co_await inode->fs.writeDataBlocks(inode, blockOffset, fileView);
 			}
 
@@ -1528,7 +1539,11 @@ async::result<std::vector<uint32_t>> FileSystem::allocateBlocks(size_t num, std:
 		HEL_CHECK(syncBitmap.error());
 	}
 
-	assert(!"Failed to find zero-bit");
+	// No free block found: the disk (or every requested block group) is full.
+	// Return what we gathered (empty on a full disk) instead of aborting -- libblockfs
+	// serves all filesystem I/O, so an abort here wedges the whole machine (DEF-81).
+	// Callers convert an empty/short result into -ENOSPC (DEF-32).
+	co_return result;
 }
 
 async::result<uint32_t> FileSystem::allocateInode(uint32_t parentIno, bool directory) {
@@ -1695,7 +1710,7 @@ async::result<std::vector<ExtentBlockRange>> FileSystem::lookupBlocksUsingExtent
 	co_return ranges;
 }
 
-async::result<void> FileSystem::assignDataBlocksUsingExtents(Inode *inode,
+async::result<frg::expected<protocols::fs::Error>> FileSystem::assignDataBlocksUsingExtents(Inode *inode,
 		uint64_t block_offset, size_t num_blocks) {
 	protocols::ostrace::Timer timer;
 
@@ -1707,7 +1722,12 @@ async::result<void> FileSystem::assignDataBlocksUsingExtents(Inode *inode,
 			continue;
 
 		auto allocated = co_await allocateBlocks(range.size, inode->number);
-		assert(!allocated.empty() && "Out of disk space");
+		// Out of disk space: allocateBlocks could not satisfy the full range. The
+		// extent path has no partial-retry loop (see assert(progress==range.size)
+		// below), so a short result is also a failure. Any partial allocation is
+		// leaked -- ext2 block-free is unimplemented (DEF-32).
+		if(allocated.size() != range.size)
+			co_return protocols::fs::Error::noSpaceLeft;
 
 		// Merge the allocated blocks to a vector of
 		// [begin, end] pairs.
@@ -1950,6 +1970,8 @@ async::result<void> FileSystem::assignDataBlocksUsingExtents(Inode *inode,
 		ostEvtExt2AssignDataBlocks,
 		ostAttrTime(timer.elapsed())
 	);
+
+	co_return frg::success;
 }
 
 async::result<void> FileSystem::readDataBlocksUsingExtents(std::shared_ptr<Inode> inode, uint64_t block_offset,
@@ -2000,12 +2022,12 @@ async::result<void> FileSystem::writeDataBlocksUsingExtents(std::shared_ptr<Inod
 	assert(progress == num_blocks);
 }
 
-async::result<void> FileSystem::assignDataBlocks(Inode *inode,
+async::result<frg::expected<protocols::fs::Error>> FileSystem::assignDataBlocks(Inode *inode,
 		uint64_t block_offset, size_t num_blocks) {
 	if(inode->usesExtents) {
-		co_await assignDataBlocksUsingExtents(inode, block_offset, num_blocks);
+		FRG_CO_TRY(co_await assignDataBlocksUsingExtents(inode, block_offset, num_blocks));
 		co_await helix_ng::asyncNop();
-		co_return;
+		co_return frg::success;
 	}
 
 	protocols::ostrace::Timer timer;
@@ -2045,6 +2067,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 				}
 
 				auto allocated = co_await allocateBlocks(range, inode->number);
+				if(allocated.empty())
+					co_return protocols::fs::Error::noSpaceLeft;
 				for (auto const [blocknum, block] : std::views::enumerate(allocated))
 					disk_inode->data.blocks.direct[idx + blocknum] = block;
 
@@ -2057,7 +2081,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 			// Allocate the single-indirect block itself.
 			if(!disk_inode->data.blocks.singleIndirect) {
 				auto block = co_await allocateBlocks(1, inode->number);
-				assert(!block.empty() && "Out of disk space"); // TODO: Fix this.
+				if(block.empty())
+					co_return protocols::fs::Error::noSpaceLeft;
 				disk_inode->blocks += (blockSize / 512);
 				disk_inode->data.blocks.singleIndirect = block[0];
 				needsReset = true;
@@ -2091,6 +2116,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 				}
 
 				auto allocated = co_await allocateBlocks(range, inode->number);
+				if(allocated.empty())
+					co_return protocols::fs::Error::noSpaceLeft;
 				for (auto const [blocknum, block] : std::views::enumerate(allocated))
 					window[idx + blocknum] = block;
 
@@ -2101,7 +2128,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 			bool doubleNeedsReset = false;
 			if(!disk_inode->data.blocks.doubleIndirect) {
 				auto block = co_await allocateBlocks(1, inode->number);
-				assert(!block.empty() && "Out of disk space"); // TODO: Fix this.
+				if(block.empty())
+					co_return protocols::fs::Error::noSpaceLeft;
 				disk_inode->blocks += (blockSize / 512);
 				disk_inode->data.blocks.doubleIndirect = block[0];
 				doubleNeedsReset = true;
@@ -2123,7 +2151,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 				if(!double_window[indirect_frame]) {
 					// Allocate the single indirect block.
 					auto block = co_await allocateBlocks(1, inode->number);
-					assert(!block.empty() && "Out of disk space"); // TODO: Fix this.
+					if(block.empty())
+						co_return protocols::fs::Error::noSpaceLeft;
 					disk_inode->blocks += (blockSize / 512);
 					double_window[indirect_frame] = block[0];
 					needsReset = true;
@@ -2153,6 +2182,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 				}
 
 				auto allocated = co_await allocateBlocks(range, inode->number);
+				if(allocated.empty())
+					co_return protocols::fs::Error::noSpaceLeft;
 				for (auto const [blocknum, block] : std::views::enumerate(allocated))
 					window[indirect_index + blocknum] = block;
 
@@ -2176,6 +2207,8 @@ async::result<void> FileSystem::assignDataBlocks(Inode *inode,
 		ostEvtExt2AssignDataBlocks,
 		ostAttrTime(timer.elapsed())
 	);
+
+	co_return frg::success;
 }
 
 async::result<void> FileSystem::readDataBlocks(std::shared_ptr<Inode> inode,

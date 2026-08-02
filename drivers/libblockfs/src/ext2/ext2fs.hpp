@@ -503,7 +503,7 @@ struct FileSystem final : BaseFileSystem {
 	async::result<uint32_t> allocateInode(uint32_t parentIno = 0, bool directory = false);
 
 	// Callers must hold inode->blockMapMutex.
-	async::result<void> assignDataBlocks(Inode *inode,
+	async::result<frg::expected<protocols::fs::Error>> assignDataBlocks(Inode *inode,
 			uint64_t block_offset, size_t num_blocks);
 
 	// Callers must hold inode->blockMapMutex.
@@ -521,7 +521,7 @@ struct FileSystem final : BaseFileSystem {
 			uint64_t block_offset, size_t num_blocks, bool errorIfNotFound);
 
 	// Callers must hold inode->blockMapMutex.
-	async::result<void> assignDataBlocksUsingExtents(Inode *inode,
+	async::result<frg::expected<protocols::fs::Error>> assignDataBlocksUsingExtents(Inode *inode,
 			uint64_t block_offset, size_t num_blocks);
 
 	// Callers must hold inode->blockMapMutex.

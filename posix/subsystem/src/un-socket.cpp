@@ -368,7 +368,7 @@ public:
 	async::result<frg::expected<protocols::fs::Error, size_t>>
 	sendMsg(Process *process, uint32_t flags, const void *data, size_t max_length,
 			const void *addr_ptr, size_t addr_length,
-			std::vector<smarter::shared_ptr<File, FileHandle>> files, struct ucred ucreds) override {
+			std::vector<smarter::shared_ptr<File, FileHandle>> files, struct ucred) override {
 		OpenFile *remote = nullptr;
 		// Warn on unimplemented flags rather than asserting, matching recvMsg above and
 		// avoiding a client-triggerable crash of the shared server. DEF-31 / WI-06.
@@ -447,15 +447,18 @@ public:
 		if(logSockets)
 			std::cout << "posix: Send to socket \e[1;34m" << structName() << "\e[0m" << std::endl;
 
-		protocols::fs::utils::handleSoPasscred(remote->_passCreds, ucreds, process->pid(), process->threadGroup()->uid(), process->threadGroup()->gid());
-
 		// We ignore MSG_DONTWAIT here as we never block anyway.
 
-		// TODO: Add permission checking for ucred related items
+		// SCM_CREDENTIALS: stamp the kernel-imbued credentials of the authenticated
+		// sender -- `process` is resolved from the bragi lane's imbued credentials via
+		// findProcessWithCredentials() -- and never the client-supplied req.creds_*()
+		// fields. Honouring those would let any peer forge pid/uid/gid (e.g. uid 0) and
+		// defeat SO_PEERCRED-based authentication. This matches Linux, where an
+		// unprivileged sender may only transmit its own credentials.
 		Packet packet;
-		packet.senderPid = ucreds.pid;
-		packet.senderUid = ucreds.uid;
-		packet.senderGid = ucreds.gid;
+		packet.senderPid = process->pid();
+		packet.senderUid = process->threadGroup()->uid();
+		packet.senderGid = process->threadGroup()->gid();
 		packet.buffer.resize(max_length);
 		memcpy(packet.buffer.data(), data, max_length);
 		packet.files = std::move(files);

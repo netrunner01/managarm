@@ -13,6 +13,7 @@
 #include <protocols/fs/common.hpp>
 #include "nl-socket.hpp"
 #include "nlctrl.hpp"
+#include "nfnetlink.hpp"
 #include "uevent.hpp"
 #include "../process.hpp"
 
@@ -434,6 +435,7 @@ void OpenFile::_associatePort() {
 void setupProtocols() {
 	configure(NETLINK_KOBJECT_UEVENT, 32, &netlink::uevent::ops);
 	configure(NETLINK_GENERIC, 32, &netlink::nlctrl::ops);
+	configure(NETLINK_NETFILTER, 0, &netlink::nfnetlink::ops);
 }
 
 void configure(int protocol, size_t num_groups, const ops *ops) {

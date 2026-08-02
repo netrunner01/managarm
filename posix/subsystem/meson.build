@@ -34,6 +34,7 @@ src = [
 	'src/net.cpp',
 	'src/netlink/nl-socket.cpp',
 	'src/netlink/nlctrl.cpp',
+	'src/netlink/nfnetlink.cpp',
 	'src/netlink/uevent.cpp',
 	'src/observations.cpp',
 	'src/ostrace.cpp',

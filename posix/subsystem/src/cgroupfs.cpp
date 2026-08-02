@@ -345,6 +345,28 @@ async::result<frg::expected<Error>> DirectoryNode::unlink(std::string name) {
 	co_return frg::expected<Error>{};
 }
 
+async::result<frg::expected<Error>> DirectoryNode::rmdir(std::string name) {
+	auto it = _entries.find(name);
+	if(it == _entries.end())
+		co_return Error::noSuchFile;
+
+	auto target = it->get()->getTarget();
+	if(target->getType() != VfsType::directory)
+		co_return Error::notDirectory;
+
+	// A cgroup directory always carries its auto-generated interface files
+	// (cgroup.procs, cgroup.controllers), so those do not keep it "non-empty".
+	// It may be removed only when it has no child cgroups -- this is what
+	// systemd's per-unit cgroup teardown does on shutdown.
+	auto dir_target = static_cast<DirectoryNode *>(target.get());
+	for(const auto &entry : dir_target->_entries)
+		if(entry->getTarget()->getType() == VfsType::directory)
+			co_return Error::directoryNotEmpty;
+
+	_entries.erase(it);
+	co_return frg::expected<Error>{};
+}
+
 std::shared_ptr<Link> DirectoryNode::createCgroupDirectory(std::string name) {
 	auto link = directMkdir(name);
 	auto cgroup_dir = static_cast<DirectoryNode*>(link->getTarget().get());

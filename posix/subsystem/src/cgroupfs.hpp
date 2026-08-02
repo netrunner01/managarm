@@ -166,6 +166,7 @@ struct DirectoryNode final : FsNode, std::enable_shared_from_this<DirectoryNode>
 			SemanticFlags semantic_flags) override;
 	async::result<frg::expected<Error, std::shared_ptr<FsLink>>> getLink(std::string name) override;
 	async::result<frg::expected<Error>> unlink(std::string name) override;
+	async::result<frg::expected<Error>> rmdir(std::string name) override;
 
 	async::result<Error> chmod(int) override {
 		co_return Error::success;

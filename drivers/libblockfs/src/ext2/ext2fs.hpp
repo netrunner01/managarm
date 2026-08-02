@@ -502,6 +502,15 @@ struct FileSystem final : BaseFileSystem {
 	async::result<std::vector<uint32_t>> allocateBlocks(size_t num, std::optional<uint32_t> ino = std::nullopt);
 	async::result<uint32_t> allocateInode(uint32_t parentIno = 0, bool directory = false);
 
+	// Free previously-allocated blocks: the inverse of allocateBlocks. For each block,
+	// clears its block-bitmap bit and increments the owning group's freeBlocksCount.
+	// The caller is responsible for having already dropped the reference to each block
+	// (e.g. cleared the inode's block-map entry).
+	async::result<void> freeBlocks(const std::vector<uint32_t> &blocks);
+	// Free a previously-allocated inode: the inverse of allocateInode. Clears the
+	// inode-bitmap bit and increments the owning group's freeInodesCount.
+	async::result<void> freeInode(uint32_t ino, bool directory = false);
+
 	// Callers must hold inode->blockMapMutex.
 	async::result<frg::expected<protocols::fs::Error>> assignDataBlocks(Inode *inode,
 			uint64_t block_offset, size_t num_blocks);

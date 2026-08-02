@@ -803,8 +803,35 @@ Inode::resizeFile(size_t newSize) {
 		// zero out the new blocks.
 		FRG_CO_TRY(co_await ensureBackingBlocks(oldSize, newSize - oldSize));
 	} else if (newSize < oldSize) {
-		// TODO(qookie): Deallocate blocks if they're no longer within the file.
-		std::println("libblockfs: Shrinking an Ext2 file does not free data blocks!");
+		auto disk_inode = diskInode();
+		// We can only free blocks we can enumerate. Walking the indirect and extent
+		// trees is not implemented yet (DEF-80), so restrict freeing to files that
+		// live entirely in the 12 direct block slots; any file with indirect/extent
+		// blocks keeps the old (leaking) behaviour rather than a partial free that
+		// would leave the inode's block map inconsistent.
+		if (!usesExtents && fileType == kTypeRegular && oldSize <= 12 * size_t(fs.blockSize)) {
+			// Number of leading blocks that stay in the file; indices >= this are freed.
+			size_t keepBlocks = (newSize + fs.blockSize - 1) / fs.blockSize;
+
+			co_await blockMapMutex.async_lock();
+			frg::unique_lock blockMapLock{frg::adopt_lock, blockMapMutex};
+
+			std::vector<uint32_t> freed;
+			for (size_t i = keepBlocks; i < 12; i++) {
+				if (!disk_inode->data.blocks.direct[i])
+					continue;
+				freed.push_back(disk_inode->data.blocks.direct[i]);
+				disk_inode->data.blocks.direct[i] = 0;
+			}
+
+			if (!freed.empty()) {
+				co_await fs.freeBlocks(freed);
+				disk_inode->blocks -= freed.size() * (fs.blockSize / 512);
+			}
+		} else {
+			// TODO(qookie/DEF-80): free blocks in the indirect/extent trees.
+			std::println("libblockfs: Shrinking an Ext2 file does not free data blocks!");
+		}
 	} else if (newSize == oldSize) {
 		// Nothing to do.
 		co_return frg::success;
@@ -1644,6 +1671,98 @@ async::result<uint32_t> FileSystem::allocateInode(uint32_t parentIno, bool direc
 	);
 
 	co_return 0;
+}
+
+async::result<void> FileSystem::freeBlocks(const std::vector<uint32_t> &blocks) {
+	co_await allocationMutex.async_lock();
+	frg::unique_lock allocationLock{frg::adopt_lock, allocationMutex};
+
+	for(auto block : blocks) {
+		assert(block);
+		assert(block < blocksCount);
+
+		// Inverse of allocateBlocks' bit<->block mapping, so that we clear exactly
+		// the bit that was set when this block was handed out.
+		uint32_t bg = block / blocksPerGroup;
+		uint32_t idx = block % blocksPerGroup;
+		assert(bg < numBlockGroups);
+
+		helix::LockMemoryView lock_bitmap;
+		auto &&submit_bitmap = helix::submitLockMemoryView(blockBitmap,
+				&lock_bitmap,
+				bg << blockPagesShift, 1 << blockPagesShift,
+				helix::Dispatcher::global());
+		co_await submit_bitmap.async_wait();
+		HEL_CHECK(lock_bitmap.error());
+
+		auto words = reinterpret_cast<uint32_t *>(
+				reinterpret_cast<std::byte *>(blockBitmapMapping.get()) + (bg << blockPagesShift));
+
+		// The bit must currently be set; a clear bit means the block map that named
+		// this block was inconsistent. Fail stop rather than double-free (which would
+		// later hand the same block out twice and corrupt two files).
+		assert(words[idx / 32] & (static_cast<uint32_t>(1) << (idx % 32)));
+		words[idx / 32] &= ~(static_cast<uint32_t>(1) << (idx % 32));
+
+		bgdt[bg].freeBlocksCount++;
+
+		updateBlockBitmapChecksum(*this, &bgdt[bg], words, blockSize);
+		updateBlockGroupChecksum(*this, &bgdt[bg], bg);
+
+		auto syncBitmap = co_await helix_ng::synchronizeSpace(
+				helix::BorrowedDescriptor{kHelNullHandle},
+				words, 1 << blockPagesShift);
+		HEL_CHECK(syncBitmap.error());
+	}
+
+	// Persist the updated free counts (allocateBlocks leaves this to its callers;
+	// the free path's callers do not raise it, so do it here -- mirrors allocateInode).
+	bdgtWriteback.raise();
+
+	co_return;
+}
+
+async::result<void> FileSystem::freeInode(uint32_t ino, bool directory) {
+	assert(ino);
+	assert(ino < inodesCount);
+
+	co_await allocationMutex.async_lock();
+	frg::unique_lock allocationLock{frg::adopt_lock, allocationMutex};
+
+	// Inverse of allocateInode's ino<->bit mapping (inodes are 1-based).
+	uint32_t bg = (ino - 1) / inodesPerGroup;
+	uint32_t idx = (ino - 1) % inodesPerGroup;
+	assert(bg < numBlockGroups);
+
+	helix::LockMemoryView lock_bitmap;
+	auto &&submit_bitmap = helix::submitLockMemoryView(inodeBitmap,
+			&lock_bitmap,
+			bg << blockPagesShift, 1 << blockPagesShift,
+			helix::Dispatcher::global());
+	co_await submit_bitmap.async_wait();
+	HEL_CHECK(lock_bitmap.error());
+
+	auto words = reinterpret_cast<uint32_t *>(
+			reinterpret_cast<std::byte *>(inodeBitmapMapping.get()) + (bg << blockPagesShift));
+
+	assert(words[idx / 32] & (static_cast<uint32_t>(1) << (idx % 32)));
+	words[idx / 32] &= ~(static_cast<uint32_t>(1) << (idx % 32));
+
+	bgdt[bg].freeInodesCount++;
+	if(directory)
+		bgdt[bg].usedDirsCount--;
+
+	updateInodeBitmapChecksum(*this, &bgdt[bg], words, blockSize);
+	updateBlockGroupChecksum(*this, &bgdt[bg], bg);
+
+	bdgtWriteback.raise();
+
+	auto syncBitmap = co_await helix_ng::synchronizeSpace(
+			helix::BorrowedDescriptor{kHelNullHandle},
+			words, 1 << blockPagesShift);
+	HEL_CHECK(syncBitmap.error());
+
+	co_return;
 }
 
 async::result<std::vector<ExtentBlockRange>> FileSystem::lookupBlocksUsingExtent(Inode *inode,

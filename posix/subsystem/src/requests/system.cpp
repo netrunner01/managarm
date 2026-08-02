@@ -65,6 +65,11 @@ HandleRequest::operator()(managarm::posix::MountRequest &&req,
 
 	logRequest(logRequests, self, "MOUNT", "fstype={} on={} to={}", req.fs_type(), req.path(), req.target_path());
 
+	if(self->threadGroup()->uid() != 0) {
+		co_await sendErrorResponse<managarm::posix::MountResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
+		co_return {};
+	}
+
 	auto resolveResult = co_await resolve(self->fsContext()->getRoot(),
 			self->fsContext()->getWorkingDirectory(), req.target_path(), self.get());
 	if(!resolveResult) {

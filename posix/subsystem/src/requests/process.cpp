@@ -187,10 +187,14 @@ HandleRequest::operator()(managarm::posix::SetAffinityRequest &&req,
 	auto handle = self->threadDescriptor().getHandle();
 
 	if(self->pid() != req.pid()) {
-		// TODO: permission checking
 		auto target = Process::findProcess(req.pid());
 		if(!target) {
 			co_await sendErrorResponse<managarm::posix::SetAffinityResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+			co_return {};
+		}
+		if(self->threadGroup()->uid() != 0
+				&& self->threadGroup()->euid() != target->threadGroup()->euid()) {
+			co_await sendErrorResponse<managarm::posix::SetAffinityResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
 			co_return {};
 		}
 		handle = target->threadDescriptor().getHandle();
@@ -238,10 +242,14 @@ HandleRequest::operator()(managarm::posix::GetAffinityRequest &&req,
 	auto handle = self->threadDescriptor().getHandle();
 
 	if(req.pid() && self->pid() != req.pid()) {
-		// TODO: permission checking
 		auto target = Process::findProcess(req.pid());
 		if(!target) {
 			co_await sendErrorResponse<managarm::posix::GetAffinityResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+			co_return {};
+		}
+		if(self->threadGroup()->uid() != 0
+				&& self->threadGroup()->euid() != target->threadGroup()->euid()) {
+			co_await sendErrorResponse<managarm::posix::GetAffinityResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
 			co_return {};
 		}
 		handle = target->threadDescriptor().getHandle();

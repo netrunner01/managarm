@@ -1159,6 +1159,13 @@ HandleRequest::operator()(managarm::posix::FchmodAtRequest &&req,
 		target_link = resolver.currentLink();
 	}
 
+	auto chmodStats = co_await target_link->getTarget()->getStats();
+	if(chmodStats && self->threadGroup()->uid() != 0
+			&& self->threadGroup()->uid() != static_cast<uid_t>(chmodStats.value().uid)) {
+		co_await sendErrorResponse<managarm::posix::FchmodAtResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
+		co_return {};
+	}
+
 	co_await target_link->getTarget()->chmod(req.mode());
 
 	co_await sendErrorResponse<managarm::posix::FchmodAtResponse>(conversation, managarm::posix::Errors::SUCCESS);
@@ -1228,6 +1235,11 @@ HandleRequest::operator()(managarm::posix::FchownAtRequest &&req,
 		uid = req.uid();
 	if(req.gid() != -1)
 		gid = req.gid();
+
+	if(uid && self->threadGroup()->uid() != 0) {
+		co_await sendErrorResponse<managarm::posix::FchownAtResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
+		co_return {};
+	}
 
 	auto result = co_await targetLink->getTarget()->chown(uid, gid);
 	if(!result) {

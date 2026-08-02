@@ -287,6 +287,11 @@ HandleRequest::operator()(managarm::posix::SetGroupsRequest &&req,
 		);
 	HEL_CHECK(recv_list.error());
 
+	if(self->threadGroup()->uid() != 0) {
+		co_await sendErrorResponse<managarm::posix::SetGroupsResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
+		co_return {};
+	}
+
 	auto err = self->threadGroup()->setSupplementaryGroups(std::move(list));
 
 	managarm::posix::SetGroupsResponse resp;

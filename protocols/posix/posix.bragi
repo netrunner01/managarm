@@ -432,6 +432,17 @@ head(128):
 	Errors error;
 }
 
+message UnmountRequest 48 {
+head(128):
+tail:
+	string target_path;
+}
+
+message UnmountResponse 231 {
+head(128):
+	Errors error;
+}
+
 message SymlinkAtRequest 30 {
 head(128):
 	int32 fd;

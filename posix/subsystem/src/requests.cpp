@@ -109,6 +109,7 @@ async::result<void> serveRequests(std::shared_ptr<Process> self,
 			// From system.cpp
 			managarm::posix::RebootRequest,
 			managarm::posix::MountRequest,
+			managarm::posix::UnmountRequest,
 			managarm::posix::SysconfRequest,
 			managarm::posix::GetMemoryInformationRequest,
 			// From timer.cpp

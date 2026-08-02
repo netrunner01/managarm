@@ -65,6 +65,17 @@ std::shared_ptr<MountView> MountView::getMount(std::shared_ptr<FsLink> link) con
 	return *it;
 }
 
+async::result<frg::expected<Error>> MountView::unmount(std::shared_ptr<FsLink> anchor) {
+	auto it = _mounts.find(anchor);
+	if(it == _mounts.end())
+		co_return Error::illegalOperationTarget;
+	// Detach the child view. The FsLink stays obstructed (there is no un-obstruct
+	// primitive yet); harmless -- the covered node simply stops being shadowed for
+	// path resolution once the mount is gone.
+	_mounts.erase(it);
+	co_return frg::expected<Error>{};
+}
+
 namespace {
 
 std::shared_ptr<MountView> rootView;

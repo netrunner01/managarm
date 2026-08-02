@@ -148,6 +148,66 @@ HandleRequest::operator()(managarm::posix::MountRequest &&req,
 }
 
 async::result<std::expected<void, DispatchError>>
+HandleRequest::operator()(managarm::posix::UnmountRequest &&req,
+		helix::BorrowedDescriptor conversation, bragi::preamble preamble,
+		std::shared_ptr<Process> self, std::shared_ptr<Generation>) {
+	id = preamble.id();
+
+	auto tailRes = co_await dispatchTail(req, conversation, preamble);
+	if(!tailRes)
+		co_return std::unexpected(tailRes.error());
+	logBragiRequest(req);
+
+	logRequest(logRequests, self, "UMOUNT", "target={}", req.target_path());
+
+	if(self->threadGroup()->uid() != 0) {
+		co_await sendErrorResponse<managarm::posix::UnmountResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
+		co_return {};
+	}
+
+	auto resolveResult = co_await resolve(self->fsContext()->getRoot(),
+			self->fsContext()->getWorkingDirectory(), req.target_path(), self.get());
+	if(!resolveResult) {
+		if(resolveResult.error() == protocols::fs::Error::fileNotFound)
+			co_await sendErrorResponse<managarm::posix::UnmountResponse>(conversation, managarm::posix::Errors::FILE_NOT_FOUND);
+		else
+			co_await sendErrorResponse<managarm::posix::UnmountResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		co_return {};
+	}
+	auto target = resolveResult.value();
+
+	// resolve() crosses into a mount at the final component, so a mount point comes
+	// back as the child MountView whose .second is its own origin root. Anything else
+	// (a non-mounted directory, or the VFS root which has no parent) is not something
+	// we can unmount -- Linux returns EINVAL there.
+	auto mountView = target.first;
+	if(!mountView->getParent() || target.second != mountView->getOrigin()) {
+		co_await sendErrorResponse<managarm::posix::UnmountResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		co_return {};
+	}
+
+	auto unmountResult = co_await mountView->getParent()->unmount(mountView->getAnchor());
+	if(!unmountResult) {
+		co_await sendErrorResponse<managarm::posix::UnmountResponse>(conversation, unmountResult.error() | toPosixProtoError);
+		co_return {};
+	}
+
+	logRequest(logRequests, self, "UMOUNT", "succeeded");
+
+	managarm::posix::UnmountResponse resp;
+	resp.set_error(managarm::posix::Errors::SUCCESS);
+
+	auto [send_resp] = co_await helix_ng::exchangeMsgs(
+				conversation,
+				helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
+			);
+
+	HEL_CHECK(send_resp.error());
+	logBragiReply(resp);
+	co_return {};
+}
+
+async::result<std::expected<void, DispatchError>>
 HandleRequest::operator()(managarm::posix::SysconfRequest &&req,
 		helix::BorrowedDescriptor conversation, bragi::preamble preamble,
 		std::shared_ptr<Process> self, std::shared_ptr<Generation>) {

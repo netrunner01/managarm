@@ -55,6 +55,11 @@ struct MountView : std::enable_shared_from_this<MountView> {
 
 	async::result<void> mount(std::shared_ptr<FsLink> anchor, std::shared_ptr<FsLink> origin, ViewPath deviceLink = {});
 
+	// Removes the child mount anchored at `anchor` from this view. Open files under
+	// the old mount keep their own references, so this is a lazy (MNT_DETACH-style)
+	// detach: safe against still-open descriptors, no busy check.
+	async::result<frg::expected<Error>> unmount(std::shared_ptr<FsLink> anchor);
+
 	std::shared_ptr<MountView> getMount(std::shared_ptr<FsLink> link) const;
 
 	struct Compare {

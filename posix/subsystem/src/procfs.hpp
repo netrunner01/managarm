@@ -80,7 +80,9 @@ private:
 	async::cancellation_event _cancelServe;
 
 	DotEntriesPhase _dots = DotEntriesPhase::dot;
-	std::set<std::shared_ptr<Link>, LinkCompare>::iterator _iter;
+	// Last returned entry name; the cursor is re-resolved from it each call so a
+	// concurrent erase cannot dangle a held iterator (empty = start of scan).
+	std::string _lastName;
 };
 
 struct Link final : FsLink, std::enable_shared_from_this<Link> {
@@ -411,7 +413,9 @@ private:
 
 	DotEntriesPhase _dots = DotEntriesPhase::dot;
 	std::unordered_map<int, FileDescriptor> _fileTable;
-	std::unordered_map<int, FileDescriptor>::const_iterator _iter;
+	// Last returned fd; re-resolved each call (unordered_map iterators are
+	// invalidated by a concurrent erase or rehash). -1 = start of scan.
+	long _lastFd = -1;
 };
 
 struct CgroupNode final : RegularNode {
@@ -516,7 +520,9 @@ private:
 
 	DotEntriesPhase _dots = DotEntriesPhase::dot;
 	std::unordered_map<int, FileDescriptor> _fileTable;
-	std::unordered_map<int, FileDescriptor>::const_iterator _iter;
+	// Last returned fd; re-resolved each call (unordered_map iterators are
+	// invalidated by a concurrent erase or rehash). -1 = start of scan.
+	long _lastFd = -1;
 };
 
 struct FdInfoNode final : RegularNode {

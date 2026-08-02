@@ -107,26 +107,26 @@ void DirectoryFile::serve(smarter::shared_ptr<DirectoryFile> file) {
 
 DirectoryFile::DirectoryFile(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link)
 : FileWithDefaults{FileKind::unknown,  StructName::get("cgroupfs.dir"), std::move(mount), std::move(link)},
-		_node{static_cast<DirectoryNode *>(associatedLink()->getTarget().get())},
-		_iter{_node->_entries.begin()} { }
+		_node{static_cast<DirectoryNode *>(associatedLink()->getTarget().get())} { }
 
 void DirectoryFile::handleClose() {
 	_cancelServe.cancel();
 }
 
-// TODO: This iteration mechanism only works as long as _iter is not concurrently deleted.
 async::result<std::expected<protocols::fs::ReadEntriesResult, managarm::fs::Errors>> DirectoryFile::readEntries() {
 	if(auto entry = nextDotEntry(_dots, 0, 0); entry)
 		co_return *entry;
 
-	if(_iter != _node->_entries.end()) {
-		auto name = (*_iter)->getName();
-		_iter++;
+	auto it = _node->_entries.upper_bound(_lastName);
+	if(it != _node->_entries.end()) {
+		auto name = (*it)->getName();
+		_lastName = name;
+		++it;
 
 		co_return protocols::fs::ReadEntriesResult{
 			.name = name,
 			.inode = 0,
-			.offset = 2 + std::distance(_node->_entries.begin(), _iter)
+			.offset = 2 + std::distance(_node->_entries.begin(), it)
 		};
 	}else{
 		co_return std::unexpected(managarm::fs::Errors::END_OF_FILE);

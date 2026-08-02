@@ -141,26 +141,26 @@ void DirectoryFile::serve(smarter::shared_ptr<DirectoryFile> file) {
 
 DirectoryFile::DirectoryFile(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link)
 : FileWithDefaults{FileKind::unknown,  StructName::get("procfs.dir"), std::move(mount), std::move(link)},
-		_node{static_cast<DirectoryNode *>(associatedLink()->getTarget().get())},
-		_iter{_node->_entries.begin()} { }
+		_node{static_cast<DirectoryNode *>(associatedLink()->getTarget().get())} { }
 
 void DirectoryFile::handleClose() {
 	_cancelServe.cancel();
 }
 
-// TODO: This iteration mechanism only works as long as _iter is not concurrently deleted.
 async::result<std::expected<protocols::fs::ReadEntriesResult, managarm::fs::Errors>> DirectoryFile::readEntries() {
 	if(auto entry = nextDotEntry(_dots, 0, 0); entry)
 		co_return *entry;
 
-	if(_iter != _node->_entries.end()) {
-		auto name = (*_iter)->getName();
-		_iter++;
+	auto it = _node->_entries.upper_bound(_lastName);
+	if(it != _node->_entries.end()) {
+		auto name = (*it)->getName();
+		_lastName = name;
+		++it;
 
 		co_return protocols::fs::ReadEntriesResult{
 			.name = name,
 			.inode = 0,
-			.offset = 2 + std::distance(_node->_entries.begin(), _iter)
+			.offset = 2 + std::distance(_node->_entries.begin(), it)
 		};
 	}else{
 		co_return std::unexpected(managarm::fs::Errors::END_OF_FILE);
@@ -1271,7 +1271,7 @@ void FdDirectoryFile::serve(smarter::shared_ptr<FdDirectoryFile> file) {
 
 FdDirectoryFile::FdDirectoryFile(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link, Process *process)
 : FileWithDefaults{FileKind::unknown,  StructName::get("procfs.fddir"), std::move(mount), std::move(link)},
-		_process{process->weak_from_this()}, _fileTable{process->fileContext()->fileTable()}, _iter{_fileTable.begin()} {}
+		_process{process->weak_from_this()}, _fileTable{process->fileContext()->fileTable()} {}
 
 void FdDirectoryFile::handleClose() {
 	_cancelServe.cancel();
@@ -1281,13 +1281,30 @@ FutureMaybe<std::expected<protocols::fs::ReadEntriesResult, managarm::fs::Errors
 	if(auto entry = nextDotEntry(_dots, 0, 0); entry)
 		co_return *entry;
 
-	if(_iter != _fileTable.end()) {
-		auto name = std::to_string((_iter++)->first);
+	// Re-scan for the smallest fd greater than the last one returned instead of
+	// holding an iterator across suspension (a concurrent close()/insert would
+	// invalidate or dangle it). This enumerates fds in ascending order.
+	auto it = _fileTable.end();
+	for(auto candidate = _fileTable.begin(); candidate != _fileTable.end(); ++candidate) {
+		if(candidate->first <= _lastFd)
+			continue;
+		if(it == _fileTable.end() || candidate->first < it->first)
+			it = candidate;
+	}
+
+	if(it != _fileTable.end()) {
+		_lastFd = it->first;
+		auto name = std::to_string(it->first);
+
+		long index = 0;
+		for(const auto &entry : _fileTable)
+			if(entry.first <= _lastFd)
+				++index;
 
 		co_return protocols::fs::ReadEntriesResult{
 			.name = name,
 			.inode = 0,
-			.offset = 2 + std::distance(_fileTable.cbegin(), _iter)
+			.offset = 2 + index
 		};
 	}else{
 		co_return std::unexpected(managarm::fs::Errors::END_OF_FILE);
@@ -1571,7 +1588,7 @@ void FdInfoDirectoryFile::serve(smarter::shared_ptr<FdInfoDirectoryFile> file) {
 
 FdInfoDirectoryFile::FdInfoDirectoryFile(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link, Process* process)
 : FileWithDefaults{FileKind::unknown,  StructName::get("procfs.fdinfodir"), std::move(mount), std::move(link)},
-		_process{process->weak_from_this()}, _fileTable{process->fileContext()->fileTable()}, _iter{_fileTable.begin()} {}
+		_process{process->weak_from_this()}, _fileTable{process->fileContext()->fileTable()} {}
 
 void FdInfoDirectoryFile::handleClose() {
 	_cancelServe.cancel();
@@ -1581,13 +1598,30 @@ FutureMaybe<std::expected<protocols::fs::ReadEntriesResult, managarm::fs::Errors
 	if(auto entry = nextDotEntry(_dots, 0, 0); entry)
 		co_return *entry;
 
-	if(_iter != _fileTable.end()) {
-		auto name = std::to_string((_iter++)->first);
+	// Re-scan for the smallest fd greater than the last one returned instead of
+	// holding an iterator across suspension (a concurrent close()/insert would
+	// invalidate or dangle it). This enumerates fds in ascending order.
+	auto it = _fileTable.end();
+	for(auto candidate = _fileTable.begin(); candidate != _fileTable.end(); ++candidate) {
+		if(candidate->first <= _lastFd)
+			continue;
+		if(it == _fileTable.end() || candidate->first < it->first)
+			it = candidate;
+	}
+
+	if(it != _fileTable.end()) {
+		_lastFd = it->first;
+		auto name = std::to_string(it->first);
+
+		long index = 0;
+		for(const auto &entry : _fileTable)
+			if(entry.first <= _lastFd)
+				++index;
 
 		co_return protocols::fs::ReadEntriesResult{
 			.name = name,
 			.inode = 0,
-			.offset = 2 + std::distance(_fileTable.cbegin(), _iter)
+			.offset = 2 + index
 		};
 	}else{
 		co_return std::unexpected(managarm::fs::Errors::END_OF_FILE);

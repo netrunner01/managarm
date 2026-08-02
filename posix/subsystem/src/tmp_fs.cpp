@@ -298,7 +298,9 @@ private:
 	// The '.' and '..' entries are synthesized before iterating _entries.
 	DotEntriesPhase _dots = DotEntriesPhase::dot;
 
-	std::set<std::shared_ptr<Link>, LinkCompare>::iterator _iter;
+	// Last returned entry name; the cursor is re-resolved from it each call so a
+	// concurrent erase cannot dangle a held iterator (empty = start of scan).
+	std::string _lastName;
 };
 
 struct DirectoryNode final : Node, std::enable_shared_from_this<DirectoryNode> {
@@ -815,10 +817,8 @@ void DirectoryFile::handleClose() {
 
 DirectoryFile::DirectoryFile(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link)
 : FileWithDefaults{FileKind::unknown,  StructName::get("tmpfs.dir"), std::move(mount), std::move(link)},
-		_node{static_cast<DirectoryNode *>(associatedLink()->getTarget().get())},
-		_iter{_node->_entries.begin()} { }
+		_node{static_cast<DirectoryNode *>(associatedLink()->getTarget().get())} { }
 
-// TODO: This iteration mechanism only works as long as _iter is not concurrently deleted.
 async::result<std::expected<protocols::fs::ReadEntriesResult, managarm::fs::Errors>>
 DirectoryFile::readEntries() {
 	// '.' and '..' are not stored in _entries; synthesize them before iterating.
@@ -830,11 +830,13 @@ DirectoryFile::readEntries() {
 			co_return *entry;
 	}
 
-	if(_iter != _node->_entries.end()) {
-		auto name = (*_iter)->getName();
-		auto target = static_cast<Node *>((*_iter)->getTarget().get());
+	auto it = _node->_entries.upper_bound(_lastName);
+	if(it != _node->_entries.end()) {
+		auto name = (*it)->getName();
+		auto target = static_cast<Node *>((*it)->getTarget().get());
 		auto type = target->getType();
-		_iter++;
+		_lastName = name;
+		++it;
 
 		int64_t fileType = managarm::fs::FileType::REGULAR;
 
@@ -865,7 +867,7 @@ DirectoryFile::readEntries() {
 		co_return protocols::fs::ReadEntriesResult{
 			.name = name,
 			.inode = static_cast<ino_t>(target->inodeNumber()),
-			.offset = 2 + std::distance(_node->_entries.begin(), _iter),
+			.offset = 2 + std::distance(_node->_entries.begin(), it),
 			.fileType = fileType
 		};
 	}else{

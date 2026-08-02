@@ -6,6 +6,7 @@
 #include <nic/rtl8168/descriptor.hpp>
 #include <nic/rtl8168/regs.hpp>
 #include <nic/rtl8168/debug_options.hpp>
+#include <helix/timer.hpp>
 
 void RealtekNic::setTxConfigRegisters() {
 	auto val = flags::transmit_config::mxdma(flags::transmit_config::mxdma_burst) |
@@ -54,6 +55,17 @@ TxQueue::TxQueue(
   hw_tx_index{0, _descriptors.size()} {}
 
 async::result<void> TxQueue::submitDescriptor(arch::dma_buffer_view payload, RealtekNic &nic) {
+	// The TX ring may be full. Reap already-transmitted descriptors and wait for the
+	// card to release a slot before posting; if none becomes free in time, drop the
+	// frame rather than aborting the driver.
+	if(!_amount_free_descriptors) {
+		if(!co_await helix::kindaBusyWait(10'000'000, [this] {
+			handleTxOk();
+			return _amount_free_descriptors != 0;
+		}))
+			co_return;
+	}
+
 	auto ev_req = std::make_shared<Request>(_descriptors.size());
 
 	co_await postDescriptor(payload, nic, ev_req);
@@ -61,7 +73,8 @@ async::result<void> TxQueue::submitDescriptor(arch::dma_buffer_view payload, Rea
 }
 
 // TODO: support large packets
-// TODO: this function should be able to fail; there may not be enough space in the ring buffer, which should be handled gracefully
+// The ring-full case is handled gracefully by submitDescriptor(), which blocks (or drops)
+// until a descriptor is free; this assert therefore only guards that invariant.
 async::result<void> TxQueue::postDescriptor(arch::dma_buffer_view payload, RealtekNic &nic, std::shared_ptr<Request> req) {
 	assert(_amount_free_descriptors);
 

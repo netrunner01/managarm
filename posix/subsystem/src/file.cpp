@@ -217,13 +217,14 @@ File::ptSendMsg(void *object, helix_ng::CredentialsView creds, uint32_t flags,
 	if(flags & ~(MSG_DONTWAIT | MSG_CMSG_CLOEXEC | MSG_NOSIGNAL)) {
 		std::cout << "\e[31mposix: Unknown SENDMSG flags: 0x" << std::hex << flags
 			<< std::dec << "\e[39m" << std::endl;
-		assert(!"Flags not implemented");
+		co_return Error::illegalArguments | protocols::fs::toFsProtoError;
 	}
 
 	std::vector<smarter::shared_ptr<File, FileHandle>> files;
 	for(auto fd : fds) {
 		auto file = (*maybeProcess)->fileContext()->getFile(fd);
-		assert(file && "Illegal FD for SENDMSG cmsg");
+		if(!file)
+			co_return Error::illegalArguments | protocols::fs::toFsProtoError;
 		files.push_back(std::move(file));
 	}
 

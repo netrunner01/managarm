@@ -594,7 +594,14 @@ HandleRequest::operator()(managarm::posix::SigactionRequest &&req,
 		std::cout << "\e[31mposix: Unknown SIG_ACTION flags: 0x"
 				<< std::hex << req.flags()
 				<< std::dec << "\e[39m" << std::endl;
-		assert(!"Flags not implemented");
+		managarm::posix::SigactionResponse resp;
+		resp.set_error(managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
+			helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
+		);
+		HEL_CHECK(send_resp.error());
+		logBragiReply(resp);
+		co_return {};
 	}
 
 	managarm::posix::SigactionResponse resp;

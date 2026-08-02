@@ -14,6 +14,7 @@
 #include <bragi/helpers-all.hpp>
 #include <bragi/helpers-frigg.hpp>
 
+#include <uacpi/kernel_api.h>
 #include <uacpi/sleep.h>
 
 #include <sys/reboot.h>
@@ -29,6 +30,23 @@ void issuePs2Reset() {
 	arch::io_space space;
 	space.store(ps2Command, ps2Reset);
 	pollSleepNano(100'000'000); // 100ms should be long enough to actually reset.
+}
+
+// Enter ACPI S5 (poweroff). This MUST run from a uACPI work-queue context, not inline on
+// the mbus serve fiber: the sleep path blocks internally, which trips an IPL assertion at
+// the level the serve fiber runs at. Mirrors the ACPI power-button path (ec.cpp).
+static void enterSleepStateS5(uacpi_handle) {
+	auto ret = uacpi_prepare_for_sleep_state(UACPI_SLEEP_STATE_S5);
+	if (uacpi_unlikely_error(ret))
+		infoLogger() << "thor: Preparing to enter sleep state S5 failed: "
+		             << uacpi_status_to_string(ret) << frg::endlog;
+
+	ret = uacpi_enter_sleep_state(UACPI_SLEEP_STATE_S5);
+	if (uacpi_unlikely_error(ret))
+		infoLogger() << "thor: Entering sleep state S5 failed: "
+		             << uacpi_status_to_string(ret) << frg::endlog;
+
+	panicLogger() << "thor: Poweroff failed" << frg::endlog;
 }
 #endif
 
@@ -68,19 +86,14 @@ private:
 			switch (req->cmd()) {
 				case RB_POWER_OFF: {
 #ifdef __x86_64__
-					auto ret = uacpi_prepare_for_sleep_state(UACPI_SLEEP_STATE_S5);
-					if (uacpi_unlikely_error(ret))
-						infoLogger() << "thor: Preparing to enter sleep state S5 failed: "
-						             << uacpi_status_to_string(ret) << frg::endlog;
-
-					ret = uacpi_enter_sleep_state(UACPI_SLEEP_STATE_S5);
-					if (uacpi_unlikely_error(ret))
-						infoLogger() << "thor: Entering sleep state S5 failed: "
-						             << uacpi_status_to_string(ret) << frg::endlog;
-#endif
-					// Poweroff failed, panic
-					panicLogger() << "thor: Poweroff failed" << frg::endlog;
+					// Schedule S5 on a work queue instead of entering it inline: the sleep
+					// path blocks and would trip an IPL assertion on this serve fiber.
+					uacpi_kernel_schedule_work(UACPI_WORK_GPE_EXECUTION, enterSleepStateS5, nullptr);
+					co_return frg::success;
+#else
+					panicLogger() << "thor: Poweroff not supported on this architecture" << frg::endlog;
 					break;
+#endif
 				}
 				case RB_AUTOBOOT: {
 #ifdef __x86_64__

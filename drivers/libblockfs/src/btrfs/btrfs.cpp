@@ -253,9 +253,11 @@ async::detached FileSystem::manageTree() {
 			    treeBackingMemory, kHelManageInitialize, manage.offset(), manage.length()
 			));
 		} else {
-			std::println("libblockfs/btrfs: writeback unimplemented for tree data!");
-			HEL_CHECK(helUpdateMemory(treeBackingMemory, kHelManageWriteback,
-				manage.offset(), manage.length()));
+			// btrfs is read-only, so no page should ever become dirty and this
+			// writeback path should be unreachable. Acknowledging the writeback
+			// here would tell the kernel to drop the dirty state without anything
+			// being written back -> silent data loss. Abort loudly instead.
+			assert(!"libblockfs/btrfs: writeback unimplemented for tree data");
 		}
 	}
 }
@@ -601,9 +603,11 @@ async::detached FileSystem::manageFileData(std::shared_ptr<Inode> inode) {
 			    inode->backingMemory, kHelManageInitialize, manage.offset(), manage.length()
 			));
 		} else {
-			std::println("libblockfs/btrfs: writeback unimplemented for file data!");
-			HEL_CHECK(helUpdateMemory(inode->backingMemory, kHelManageWriteback,
-				manage.offset(), manage.length()));
+			// btrfs is read-only, so no page should ever become dirty and this
+			// writeback path should be unreachable. Acknowledging the writeback
+			// here would tell the kernel to drop the dirty state without anything
+			// being written back -> silent data loss. Abort loudly instead.
+			assert(!"libblockfs/btrfs: writeback unimplemented for file data");
 		}
 	}
 }

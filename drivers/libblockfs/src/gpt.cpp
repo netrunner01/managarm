@@ -53,8 +53,13 @@ async::result<void> Table::parse() {
 			}
 		}
 
-		// TODO: handle this error
-		assert(header.first.size());
+		// No valid GPT header at the native or any common sector size: the
+		// disk has no (readable) GPT partition table -- blank, MBR-only, or a
+		// protective MBR with no valid GPT. Treat it as having no partitions
+		// and let the caller fall back to the whole device (numPartitions()==0
+		// is already handled: only the whole-disk raw device is published).
+		if (!header.first.size())
+			co_return;
 
 		std::println(std::cout, "libblockfs: using non-native gpt sector size {}",
 			gptSectorSize_);

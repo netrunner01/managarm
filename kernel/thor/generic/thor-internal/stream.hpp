@@ -174,7 +174,7 @@ public:
 
 public:
 	Error _error{};
-	frg::array<char, 16> _transmitCredentials;
+	frg::array<char, 16> _transmitCredentials{};
 	size_t _actualLength = 0;
 	frg::unique_memory<KernelAlloc> _transmitBuffer;
 	smarter::shared_ptr<Stream, LanePolicy> _lane;

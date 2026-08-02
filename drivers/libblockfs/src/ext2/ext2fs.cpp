@@ -917,6 +917,30 @@ async::result<void> FileSystem::init() {
 	metadataChecksum = sb.featureRoCompat & EXT4_RO_COMPAT_METADATA_CSUM;
 	uint16_t blockGroupDescriptorSize = is64Bit ? sb.groupDescSize : 32;
 
+	// DEF-06: this driver has no journal replay and no read-only degrade mode. Mounting a
+	// volume with a journal read-write silently ignores its pending transactions (which may
+	// later be replayed over freshly-written data), and mounting one with an incompat or
+	// ro_compat feature we do not implement corrupts it in other ways. Refuse such a mount
+	// loudly here, the same way a bad magic aborts init above. The handled masks list only
+	// the features this driver actually implements; every bit set on the current ext2 rootfs
+	// (filetype, sparse_super, large_file) is included, so a plain ext2 boot never trips this.
+	constexpr uint32_t handledIncompat = EXT4_INCOMPAT_FILETYPE
+			| EXT4_INCOMPAT_EXTENTS | EXT4_INCOMPAT_64BIT | EXT4_INCOMPAT_CSUM_SEED;
+	constexpr uint32_t handledRoCompat = EXT4_RO_COMPAT_SPARSE_SUPER
+			| EXT4_RO_COMPAT_LARGE_FILE | EXT4_RO_COMPAT_METADATA_CSUM;
+	uint32_t unknownIncompat = sb.featureIncompat & ~handledIncompat;
+	uint32_t unknownRoCompat = sb.featureRoCompat & ~handledRoCompat;
+	if((sb.featureCompat & EXT4_COMPAT_HAS_JOURNAL) || unknownIncompat || unknownRoCompat) {
+		std::cout << "ext2fs: refusing read-write mount of an unsupported volume"
+				<< " (compat " << sb.featureCompat
+				<< ", incompat " << sb.featureIncompat
+				<< ", ro_compat " << sb.featureRoCompat << "):"
+				<< " journal=" << bool(sb.featureCompat & EXT4_COMPAT_HAS_JOURNAL)
+				<< " unhandled-incompat=" << unknownIncompat
+				<< " unhandled-ro_compat=" << unknownRoCompat << std::endl;
+		abort();
+	}
+
 	if(logSuperblock) {
 		std::cout << "ext2fs: Revision is: " << sb.revLevel << std::endl;
 		std::cout << "ext2fs: Block size is: " << blockSize << std::endl;

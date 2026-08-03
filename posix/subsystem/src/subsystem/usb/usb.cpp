@@ -117,9 +117,11 @@ void bindController(mbus_ng::Entity entity, mbus_ng::Properties properties, uint
 					device->speed = "12";
 					break;
 				default:
-					printf("USB version 1.%u\n", minor);
-					assert(!"invalid USB 1 minor revision");
-					break;
+					// Unhandled controller version: skip this root hub rather than crash the
+					// shared posix server (hardware-input; DEF-31 / WI-06).
+					std::cerr << "posix: unhandled USB 1 minor revision " << minor
+							<< "; skipping root hub for " << sysfs_name << std::endl;
+					return;
 			}
 			device->descriptors.insert(device->descriptors.end(), root_hub::descUsb1_1.begin(), root_hub::descUsb1_1.end());
 			device->descriptors.insert(device->descriptors.end(), root_hub::descFullSpeed.begin(), root_hub::descFullSpeed.end());
@@ -147,9 +149,11 @@ void bindController(mbus_ng::Entity entity, mbus_ng::Properties properties, uint
 					device->descriptors.insert(device->descriptors.end(), root_hub::descSuperSpeed.begin(), root_hub::descSuperSpeed.end());
 					break;
 				default:
-					std::cerr << "unhandled USB 3 minor revision: " << minor << '\n';
-					assert(!"unhandled USB 3 minor revision");
-					break;
+					// Unhandled controller version: skip this root hub rather than crash the
+					// shared posix server (hardware-input; DEF-31 / WI-06).
+					std::cerr << "posix: unhandled USB 3 minor revision " << minor
+							<< "; skipping root hub for " << sysfs_name << std::endl;
+					return;
 			}
 			break;
 		default:
@@ -157,7 +161,11 @@ void bindController(mbus_ng::Entity entity, mbus_ng::Properties properties, uint
 			break;
 	}
 
-	assert(device->descriptors.size() >= 18 + 25);
+	if(device->descriptors.size() < 18 + 25) {
+		std::cerr << "posix: root hub " << sysfs_name << " has an unsupported USB version ("
+				<< major << "." << minor << "); skipping" << std::endl;
+		return;
+	}
 
 	drvcore::registerMbusDevice(entity.id(), device);
 	drvcore::installDevice(device);

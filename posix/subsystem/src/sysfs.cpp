@@ -89,9 +89,23 @@ async::result<frg::expected<Error, off_t>> AttributeFile::seek(off_t offset, Vfs
 		_offset = _offset + offset;
 	else if(whence == VfsSeek::absolute)
 		_offset = offset;
-	else if(whence == VfsSeek::eof)
-		// TODO: Unimplemented!
-		assert(!"unimplemented");
+	else if(whence == VfsSeek::eof) {
+		// SEEK_END: resolve against the current attribute length. Cache the value if we
+		// have not already (same lazy load as pread) so we know its size.
+		// (Previously asserted -- but posix serves every process and is never restarted,
+		// so lseek(fd, x, SEEK_END) on a sysfs attribute would freeze the machine.
+		// DEF-31 / WI-06.)
+		if(!_cached) {
+			auto node = static_cast<AttributeNode *>(associatedLink()->getTarget().get());
+			// TODO(geert): Don't assume this doesn't block.
+			if(auto res = co_await node->_attr->show(node->_object); res) {
+				_buffer = res.value();
+				_cached = true;
+			} else
+				co_return res.error() | protocols::fs::toFsProtoError | toPosixError;
+		}
+		_offset = _buffer.size() + offset;
+	}
 	co_return _offset;
 }
 

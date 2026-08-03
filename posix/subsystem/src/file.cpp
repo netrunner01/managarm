@@ -96,15 +96,11 @@ async::result<frg::expected<protocols::fs::Error, size_t>> File::ptPwrite(void *
 		co_return Error::badProcessCredentials | protocols::fs::toFsProtoError;
 	}
 	auto result = co_await self->pwrite(maybeProcess->get(), offset, buffer, length);
-	if(!result) {
-		switch(result.error()) {
-		case Error::noSpaceLeft:
-			co_return protocols::fs::Error::noSpaceLeft;
-		default:
-			assert(!"Unexpected error from pwrite()");
-			__builtin_unreachable();
-		}
-	}
+	// posix-subsystem serves every process and is never restarted, so a reachable assert
+	// here (any pwrite error other than noSpaceLeft) would freeze the machine (DEF-31/WI-06).
+	// Map every error through the standard converter, mirroring ptWrite() above.
+	if(!result)
+		co_return result.error() | protocols::fs::toFsProtoError;
 	co_return result.value();
 }
 

@@ -709,12 +709,14 @@ private:
 		}
 	}
 
-	async::result<frg::expected<Error, std::shared_ptr<FsLink>>> mkdev(std::string name, VfsType type, DeviceId id) override {
-		(void)name;
-		(void)type;
-		(void)id;
-		assert(!"mkdev is not implemented for extern_fs");
-		__builtin_unreachable();
+	async::result<frg::expected<Error, std::shared_ptr<FsLink>>> mkdev(std::string, VfsType, DeviceId) override {
+		// TODO: forward device-node creation to libblockfs; ext2 supports device nodes.
+		// Until then, fail gracefully like the FsNode base default rather than asserting:
+		// the mknod handler maps illegalOperationTarget -> EINVAL. posix-subsystem serves
+		// every process and is never restarted, so a reachable assert here would freeze
+		// the whole machine (DEF-31 / WI-06).
+		std::cout << "posix: mkdev() is not implemented for extern_fs" << std::endl;
+		co_return Error::illegalOperationTarget;
 	}
 
 	async::result<frg::expected<Error, std::shared_ptr<FsLink>>>

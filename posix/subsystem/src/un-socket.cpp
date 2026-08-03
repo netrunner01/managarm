@@ -216,11 +216,15 @@ public:
 			co_return chunk;
 		} else {
 			assert(!packet->offset);
+			// SOCK_DGRAM: a short read truncates and discards the rest of the datagram
+			// (Linux semantics). max_length is user-controlled, so the old
+			// assert(max_length >= size) was a client-triggerable overflow of the caller's
+			// buffer; clamp instead. DEF-31 / WI-06.
 			auto size = packet->buffer.size();
-			assert(max_length >= size);
-			memcpy(data, packet->buffer.data(), size);
+			auto chunk = std::min(size, max_length);
+			memcpy(data, packet->buffer.data(), chunk);
 			_recvQueue.pop_front();
-			co_return size;
+			co_return chunk;
 		}
 	}
 
@@ -401,7 +405,12 @@ public:
 				remote = _remote;
 			} else {
 				struct sockaddr_un sa;
-				assert(addr_length <= sizeof(struct sockaddr_un));
+				// addr_length is the client's msg_namelen; reject an oversized address
+				// instead of overflowing the stack sockaddr_un. posix serves every process
+				// and is never restarted, so the old assert was a client-triggerable crash
+				// (a stack buffer overflow with asserts compiled out). DEF-31 / WI-06.
+				if(addr_length > sizeof(struct sockaddr_un))
+					co_return protocols::fs::Error::illegalArguments;
 				memcpy(&sa, addr_ptr, addr_length);
 
 				std::string path;
@@ -557,7 +566,11 @@ public:
 
 		// Create a new socket node in the FS.
 		struct sockaddr_un sa;
-		assert(addr_length <= sizeof(struct sockaddr_un));
+		// addr_length is the client's addrlen; reject an oversized address instead of
+		// overflowing the stack sockaddr_un (client-triggerable crash / stack overflow
+		// with asserts compiled out). DEF-31 / WI-06.
+		if(addr_length > sizeof(struct sockaddr_un))
+			co_return protocols::fs::Error::illegalArguments;
 		memcpy(&sa, addr_ptr, addr_length);
 		std::string path;
 

@@ -363,6 +363,14 @@ HandleRequest::operator()(managarm::posix::PidfdSendSignalRequest &&req,
 		co_return {};
 	}
 
+	// req.signal() is the user's signal number; out of range it would index the
+	// SignalQueue slots out of bounds (SignalQueue::issueSignal asserts sn-1<64). Reject
+	// like Linux (EINVAL); signal 0 stays a valid no-op permission probe. DEF-31 / WI-06.
+	if(req.signal() < 0 || req.signal() > 64) {
+		co_await sendErrorResponse<managarm::posix::PidfdSendSignalResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		co_return {};
+	}
+
 	if(req.signal() > 0) {
 		UserSignal info;
 		info.pid = self->pid();

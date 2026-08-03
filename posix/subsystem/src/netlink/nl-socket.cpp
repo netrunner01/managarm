@@ -92,13 +92,15 @@ OpenFile::readSome(Process *, void *data, size_t max_length, async::cancellation
 			co_return std::unexpected{Error::interrupted};
 	}
 
-	// TODO: Truncate packets (for SOCK_DGRAM) here.
 	auto packet = &_recvQueue.front();
+	// Truncate to the caller's buffer (netlink datagrams are discarded on short read).
+	// max_length is user-controlled, so the old assert(max_length >= size) was a
+	// client-triggerable overflow of the caller's buffer; clamp instead. DEF-31 / WI-06.
 	auto size = packet->buffer.size();
-	assert(max_length >= size);
-	memcpy(data, packet->buffer.data(), size);
+	auto chunk = std::min(size, max_length);
+	memcpy(data, packet->buffer.data(), chunk);
 	_recvQueue.pop_front();
-	co_return size;
+	co_return chunk;
 }
 
 async::result<frg::expected<Error, size_t>>

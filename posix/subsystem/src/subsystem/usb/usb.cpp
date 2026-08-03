@@ -372,7 +372,12 @@ std::shared_ptr<drvcore::BusDriver> getInterfaceDriver(std::string name) {
 		usbHidDriver->addObject();
 		interface_driver_list.insert({name, usbHidDriver});
 	} else {
-		assert(!"unsupported USB interface driver");
+		// No driver for this interface class: leave the interface unbound rather than
+		// crash the shared posix server. The name comes from a USB driver's mbus
+		// property, not raw hardware (DEF-31 / WI-06); the caller skips a null driver.
+		std::cerr << "posix: no driver for USB interface '" << name
+				<< "'; leaving it unbound" << std::endl;
+		return nullptr;
 	}
 
 	return interface_driver_list.at(name);
@@ -413,8 +418,10 @@ async::detached observeDeviceChildren(mbus_ng::EntityId deviceId) {
 					);
 
 					if(dev_if != dev->interfaces.end() && !dev_if->get()->driver) {
-						dev_if->get()->driver = getInterfaceDriver(driver_name);
-						dev_if->get()->createSymlink("driver", dev_if->get()->driver);
+						if(auto driver = getInterfaceDriver(driver_name); driver) {
+							dev_if->get()->driver = driver;
+							dev_if->get()->createSymlink("driver", driver);
+						}
 					}
 				}
 			}

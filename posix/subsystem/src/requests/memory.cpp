@@ -81,7 +81,12 @@ HandleRequest::operator()(managarm::posix::VmMapRequest &&req,
 		}
 	}else{
 		auto file = self->fileContext()->getFile(req.fd());
-		assert(file && "Illegal FD for VM_MAP");
+		// req.fd() is user-controlled; a file mmap of a closed fd must fail with EBADF,
+		// not crash the server (DEF-31 / WI-06).
+		if(!file) {
+			co_await sendErrorResponse<managarm::posix::VmMapResponse>(conversation, managarm::posix::Errors::BAD_FD);
+			co_return {};
+		}
 		auto memory = co_await file->accessMemory();
 		if(!memory) {
 			co_await sendErrorResponse<managarm::posix::VmMapResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);

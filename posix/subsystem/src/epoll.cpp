@@ -231,7 +231,12 @@ public:
 	async::result<size_t>
 	waitForEvents(struct epoll_event *events, size_t max_events,
 			async::cancellation_token cancellation) {
-		assert(max_events);
+		// A zero-size event buffer (epoll_wait maxevents=0) has nothing to report:
+		// return no events rather than asserting/indexing out of bounds. The handler
+		// then sends an empty result buffer, which the client's recvBuffer matches, so
+		// there is neither a crash nor a hung exchange. DEF-31 / WI-06.
+		if(!max_events)
+			co_return 0;
 		if(logEpoll)
 			std::println("posix.epoll \e[1;34m{}\e[0m: Entering wait. There are {} pending items; cancellation is {}",
 				structName(), (_pendingQueue.empty() ? "no " : ""), cancellation.is_cancellation_requested() ? "active" : "inactive");
@@ -477,7 +482,9 @@ Error modifyItem(File *epfile, File *file, int fd, int flags, uint64_t cookie) {
 }
 
 Error deleteItem(File *epfile, File *file, int fd, int flags) {
-	assert(!flags);
+	// EPOLL_CTL_DEL ignores the event mask; don't assert on a stray flags value from a
+	// client (DEF-31 / WI-06).
+	(void)flags;
 	auto epoll = static_cast<OpenFile *>(epfile);
 	return epoll->deleteItem(file, fd);
 }

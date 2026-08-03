@@ -366,7 +366,11 @@ public:
 			const void *addr_ptr, size_t addr_length,
 			std::vector<smarter::shared_ptr<File, FileHandle>> files, struct ucred ucreds) override {
 		OpenFile *remote = nullptr;
-		assert(!(flags & ~(MSG_DONTWAIT | MSG_NOSIGNAL)));
+		// Warn on unimplemented flags rather than asserting, matching recvMsg above and
+		// avoiding a client-triggerable crash of the shared server. DEF-31 / WI-06.
+		if(flags & ~(MSG_DONTWAIT | MSG_NOSIGNAL))
+			std::cout << "posix: Unimplemented flag in un-socket sendMsg " << std::hex
+					<< flags << std::dec << " for pid: " << process->pid() << std::endl;
 
 		if(shutdownFlags_ & shutdownWrite) {
 			if(!(flags & MSG_NOSIGNAL))

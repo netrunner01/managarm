@@ -207,8 +207,12 @@ OpenFile::sendMsg(Process *process, uint32_t flags, const void *data, size_t max
 		std::vector<smarter::shared_ptr<File, FileHandle>> files, struct ucred) {
 	if(logSockets)
 		std::cout << "posix: Send to socket \e[1;34m" << structName() << "\e[0m" << std::endl;
-	assert(!flags);
-	assert(files.empty());
+	// flags and any passed fds are user-controlled; netlink ignores both (like Linux)
+	// rather than crash the shared server. DEF-31 / WI-06.
+	if(flags)
+		std::cout << "posix: ignoring unimplemented netlink sendMsg flags 0x"
+				<< std::hex << flags << std::dec << std::endl;
+	(void)files; // SCM_RIGHTS fds are meaningless on netlink; simply dropped.
 
 	struct sockaddr_nl sa;
 	if(addr_length >= sizeof(struct sockaddr_nl) && addr_ptr) {
@@ -224,8 +228,10 @@ OpenFile::sendMsg(Process *process, uint32_t flags, const void *data, size_t max
 		grp_idx = __builtin_ffs(sa.nl_groups);
 	}
 
-	// TODO: Associate port otherwise.
-	assert(_socketPort);
+	// Auto-bind an ephemeral port if the client sends before an explicit bind()
+	// (Linux auto-binds here) rather than asserting. DEF-31 / WI-06.
+	if(!_socketPort)
+		_associatePort();
 
 	core::netlink::Packet packet;
 	packet.senderPid = process->pid();
@@ -295,7 +301,9 @@ async::result<protocols::fs::Error> OpenFile::bind(Process *,
 	} else {
 		_socketPort = sa.nl_pid;
 		auto res = globalPortMap.insert({_socketPort, this});
-		assert(res.second);
+		// The requested nl_pid may already be bound by another netlink socket.
+		if(!res.second)
+			co_return protocols::fs::Error::addressInUse;
 	}
 
 	if(sa.nl_groups) {
@@ -306,7 +314,9 @@ async::result<protocols::fs::Error> OpenFile::bind(Process *,
 					<< _protocol << "." << (i + 1) << std::endl;
 
 			auto it = globalGroupMap.find({_protocol, i + 1});
-			assert(it != globalGroupMap.end());
+			// Skip a group this protocol didn't configure rather than asserting.
+			if(it == globalGroupMap.end())
+				continue;
 			auto group = it->second.get();
 			group->subscriptions.push_back(this);
 			joinedGroups_ |= 1 << i;
@@ -318,7 +328,10 @@ async::result<protocols::fs::Error> OpenFile::bind(Process *,
 }
 
 async::result<size_t> OpenFile::sockname(void *addr_ptr, size_t max_addr_length) {
-	assert(_socketPort);
+	// getsockname() before an explicit bind() auto-binds an ephemeral port (Linux
+	// behaviour) rather than asserting. DEF-31 / WI-06.
+	if(!_socketPort)
+		_associatePort();
 
 	// TODO: Fill in nl_groups.
 	struct sockaddr_nl sa;
@@ -333,7 +346,10 @@ async::result<size_t> OpenFile::sockname(void *addr_ptr, size_t max_addr_length)
 async::result<frg::expected<protocols::fs::Error>> OpenFile::setSocketOption(int layer, int number,
 		std::vector<char> optbuf) {
 	if(layer == SOL_SOCKET && number == SO_ATTACH_FILTER) {
-		assert(optbuf.size() % sizeof(struct sock_filter) == 0);
+		// optbuf comes from setsockopt(optlen); reject a non-multiple length gracefully
+		// (like the !bpf.validate() path below) rather than asserting. DEF-31 / WI-06.
+		if(optbuf.size() % sizeof(struct sock_filter) != 0)
+			co_return protocols::fs::Error::illegalArguments;
 
 		Bpf bpf{optbuf};
 		if(!bpf.validate())
@@ -347,7 +363,10 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::setSocketOption(int
 		if(val >= MAX_SUPPORTED_GROUP_ID)
 			co_return protocols::fs::Error::illegalArguments;
 		auto it = globalGroupMap.find({_protocol, val});
-		assert(it != globalGroupMap.end());
+		// val is the user's setsockopt group id (groups are stored 1..N, so 0 and any
+		// unconfigured group miss); reject rather than asserting. DEF-31 / WI-06.
+		if(it == globalGroupMap.end())
+			co_return protocols::fs::Error::illegalArguments;
 		auto group = it->second.get();
 		group->subscriptions.push_back(this);
 		joinedGroups_ |= 1 << val;

@@ -127,6 +127,11 @@ struct FileOperations {
 		fallocate = f;
 		return *this;
 	}
+	constexpr FileOperations &withFsync(async::result<frg::expected<protocols::fs::Error>> (*f)(void *object,
+			bool dataOnly)) {
+		fsync = f;
+		return *this;
+	}
 	constexpr FileOperations &withIoctl(async::result<void> (*f)(void *object,
 			uint32_t id, helix_ng::RecvInlineResult msg, helix::UniqueLane conversation)) {
 		ioctl = f;
@@ -213,6 +218,10 @@ struct FileOperations {
 	async::result<frg::expected<Error>> (*getSocketOption)(void *object, helix_ng::CredentialsView creds,
 			int layer, int number, std::vector<char> &optbuf) = nullptr;
 	async::result<Error> (*shutdown)(void *object, int how);
+	// Appended at the END of the struct on purpose: FileOperations is shared across
+	// libfs_protocol.so users; adding a member here keeps every existing member's offset
+	// stable, so a not-yet-rebuilt consumer stays ABI-compatible. (WI-13)
+	async::result<frg::expected<protocols::fs::Error>> (*fsync)(void *object, bool dataOnly) = nullptr;
 
 	bool logRequests = false;
 };

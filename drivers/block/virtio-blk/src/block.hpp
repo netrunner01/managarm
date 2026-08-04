@@ -22,7 +22,8 @@ static_assert(sizeof(VirtRequest) == 16, "Bad sizeof(VirtRequest)");
 
 enum {
 	VIRTIO_BLK_T_IN = 0,
-	VIRTIO_BLK_T_OUT = 1
+	VIRTIO_BLK_T_OUT = 1,
+	VIRTIO_BLK_T_FLUSH = 4
 };
 
 namespace spec::regs {
@@ -39,9 +40,12 @@ struct Device;
 
 struct UserRequest : virtio_core::Request {
 	UserRequest(bool write, uint64_t sector, arch::dma_buffer_view view);
+	// A cache-flush request: no data, sector 0 (VIRTIO_BLK_T_FLUSH).
+	UserRequest();
 
-	bool write;
-	uint64_t sector;
+	bool write = false;
+	bool isFlush = false;
+	uint64_t sector = 0;
 	arch::dma_buffer_view view;
 
 	async::oneshot_primitive event;
@@ -58,6 +62,7 @@ struct Device : blockfs::BlockDevice {
 
 	async::result<void> readSectors(uint64_t sector, arch::dma_buffer_view view) override;
 	async::result<void> writeSectors(uint64_t sector, arch::dma_buffer_view view) override;
+	async::result<void> flush() override;
 
 	async::result<size_t> getSize() override;
 

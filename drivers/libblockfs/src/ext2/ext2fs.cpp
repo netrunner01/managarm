@@ -1909,6 +1909,7 @@ async::result<frg::expected<protocols::fs::Error>> FileSystem::assignDataBlocksU
 				.startLow = static_cast<uint32_t>(allocatedRange.first & 0xffffffff)
 			};
 
+			bool outOfSpace = false;
 			ExtentWalker walker{this, inode, false};
 			co_await walker.walk(index,
 				[](const ExtentWalkInfo &) -> async::result<void> { co_return; },
@@ -1939,8 +1940,20 @@ async::result<frg::expected<protocols::fs::Error>> FileSystem::assignDataBlocksU
 					std::variant<std::monostate, Extent, ExtentIndex, UpdateMinBlock> nextWriteExtent;
 
 					if(info.hdr->entries + 1 > info.hdr->max) {
+						// A split always needs one new block for the moved entries; when the
+						// (inode-embedded) root is full it needs a second block to grow a level.
+						// Allocate everything up front, before mutating the tree, so an out-of-disk
+						// failure bails cleanly without leaving a partially-split tree on disk. A
+						// short allocation is leaked -- ext2 block-free is unimplemented (DEF-32/80).
+						bool rootSplit = !info.block;
 						auto newBlock = co_await allocateBlocks(1, inode->number);
-						assert(!newBlock.empty() && "Out of disk space");
+						std::vector<uint32_t> newRoot;
+						if(rootSplit)
+							newRoot = co_await allocateBlocks(1, inode->number);
+						if(newBlock.empty() || (rootSplit && newRoot.empty())) {
+							outOfSpace = true;
+							co_return ExtentIterDecision::stop;
+						}
 
 						diskInode->blocks += blockSize / 512;
 
@@ -1992,10 +2005,8 @@ async::result<frg::expected<protocols::fs::Error>> FileSystem::assignDataBlocksU
 							updateExtentChecksum(*this, inode, info.hdr);
 
 						if(!info.block) {
-							// The root is full, allocate a new level for the entries that would have been left at root.
-							auto newRoot = co_await allocateBlocks(1, inode->number);
-							assert(!newRoot.empty() && "Out of disk space");
-
+							// The root is full; newRoot (allocated above, before any mutation) grows a
+							// new level for the entries that would have been left at root.
 							diskInode->blocks += blockSize / 512;
 
 							newRootWindow = co_await metadataCache->access(newRoot[0], true);
@@ -2092,6 +2103,13 @@ async::result<frg::expected<protocols::fs::Error>> FileSystem::assignDataBlocksU
 
 					co_return ExtentIterDecision::keepGoing;
 				}));
+
+			// Extent-tree split ran out of disk space (see the split branch above). Nothing was
+			// mutated before the pre-allocation check, so the tree is still consistent. Consistent
+			// with the indirect path, blocks assigned by earlier iterations of this call stay
+			// assigned; only this operation reports ENOSPC.
+			if(outOfSpace)
+				co_return protocols::fs::Error::noSpaceLeft;
 
 			progress += allocatedRangeSize;
 		}

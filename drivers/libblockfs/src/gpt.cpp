@@ -142,6 +142,13 @@ async::result<void> Partition::writeSectors(uint64_t sector, arch::dma_buffer_vi
 	return _table.getDevice()->writeSectors(_startLba + sector, view);
 }
 
+async::result<void> Partition::flush() {
+	// A device cache flush is whole-device (no LBA range), so forward it to the parent
+	// unchanged. Without this the ext2 fs sits on a Partition whose base flush() is a
+	// no-op, and fsync() would never reach the driver's cache-flush command. (WI-13)
+	return _table.getDevice()->flush();
+}
+
 async::result<size_t> Partition::getSize() {
 	co_return _numSectors * sectorSize;
 }

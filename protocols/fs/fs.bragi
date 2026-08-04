@@ -1019,3 +1019,8 @@ head(128):
 	int64 rel_offset;
 	uint64 size;
 }
+
+message FsyncRequest 66 {
+head(128):
+	uint8 data_only;
+}

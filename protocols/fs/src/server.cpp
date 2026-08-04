@@ -1462,6 +1462,39 @@ struct HandleFileRequest {
 	}
 
 	async::result<std::expected<void, DispatchError>>
+	operator()(managarm::fs::FsyncRequest &&req, helix::BorrowedDescriptor conversation,
+			bragi::preamble preamble, smarter::shared_ptr<void> file,
+			const FileOperations *file_ops) {
+		id = preamble.id();
+		logBragiRequest(req);
+
+		// A file whose backing has no durable flush (tmpfs, or a fs server that does not
+		// implement fsync) has nothing to sync -- report SUCCESS, not an error, matching
+		// Linux fsync() on such files. POSIX EINVAL for pipes/sockets is enforced one layer
+		// up, in posix File::fsync's default.
+		managarm::fs::SvrResponse resp;
+		if(!file_ops->fsync) {
+			resp.set_error(managarm::fs::Errors::SUCCESS);
+		}else{
+			auto result = co_await file_ops->fsync(file.get(), req.data_only());
+			if(result) {
+				resp.set_error(managarm::fs::Errors::SUCCESS);
+			}else{
+				resp.set_error(result.error() | toFsError);
+			}
+		}
+
+		auto ser = resp.SerializeAsString();
+		auto [send_resp] = co_await helix_ng::exchangeMsgs(
+			conversation,
+			helix_ng::sendBuffer(ser.data(), ser.size())
+		);
+		HEL_CHECK(send_resp.error());
+		logBragiSerializedReply(ser);
+		co_return {};
+	}
+
+	async::result<std::expected<void, DispatchError>>
 	operator()(managarm::fs::FallocateRequest &&req, helix::BorrowedDescriptor conversation,
 			bragi::preamble preamble, smarter::shared_ptr<void> file,
 			const FileOperations *file_ops) {
@@ -2241,7 +2274,8 @@ async::result<void> servePassthrough(helix::UniqueLane lane,
 			managarm::fs::WriteRequest,
 			managarm::fs::PwriteRequest,
 			managarm::fs::TruncateRequest,
-			managarm::fs::FallocateRequest
+			managarm::fs::FallocateRequest,
+			managarm::fs::FsyncRequest
 		>(lane, DetachHandlers{}, HandleFileRequest{}, file, file_ops);
 		if(!res) {
 			if(res.error() == DispatchError::shutdown)

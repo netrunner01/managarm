@@ -20,6 +20,14 @@ struct BlockDevice {
 		throw std::runtime_error("BlockDevice does not support writeSectors()");
 	}
 
+	// Flush the device's volatile write cache to stable storage (for fsync durability).
+	// Default is a no-op: drivers without a real FLUSH command do NOT yet guarantee
+	// durability -- data written before the flush may still sit in a volatile cache.
+	// TODO(WI-13): implement a real FLUSH for ahci/nvme/ata (only virtio-blk has it so far).
+	virtual async::result<void> flush() {
+		co_return;
+	}
+
 	virtual async::result<size_t> getSize() = 0;
 
 	virtual async::result<void> handleIoctl(managarm::fs::GenericIoctlRequest &req, helix::BorrowedDescriptor conversation) {

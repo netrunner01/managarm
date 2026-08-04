@@ -23,6 +23,11 @@ async::result<frg::expected<protocols::fs::Error>> MemoryFile::truncate(size_t s
 	co_return (co_await _resizeFile(size)).map_error(protocols::fs::toFsProtoError);
 }
 
+async::result<frg::expected<protocols::fs::Error>> MemoryFile::fsync(bool) {
+	// memfd is memory-backed: nothing durable to flush. Report success.
+	co_return {};
+}
+
 async::result<frg::expected<protocols::fs::Error>>
 MemoryFile::allocate(int64_t offset, size_t size) {
 	assert(!offset);

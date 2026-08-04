@@ -114,6 +114,11 @@ async::result<frg::expected<protocols::fs::Error>> File::ptTruncate(void *object
 	return self->truncate(size);
 }
 
+async::result<frg::expected<protocols::fs::Error>> File::ptFsync(void *object, bool dataOnly) {
+	auto self = static_cast<File *>(object);
+	return self->fsync(dataOnly);
+}
+
 async::result<frg::expected<protocols::fs::Error>> File::ptAllocate(void *object,
 		int64_t offset, size_t size) {
 	auto self = static_cast<File *>(object);
@@ -372,6 +377,13 @@ File::sendMsg(Process *, uint32_t,
 async::result<frg::expected<protocols::fs::Error>> File::truncate(size_t) {
 	std::cout << "\e[35mposix \e[1;34m" << structName()
 			<< "\e[0m\e[35m: File does not support truncate()\e[39m" << std::endl;
+	co_return protocols::fs::Error::illegalOperationTarget;
+}
+
+// Default: a file type that cannot be synchronized (pipe, socket, ...). Linux fsync() on
+// such an fd returns EINVAL; illegalOperationTarget maps to EINVAL. Regular-file subclasses
+// (MemoryFile -> success; the extern_fs disk File -> forward to the fs server) override this.
+async::result<frg::expected<protocols::fs::Error>> File::fsync(bool) {
 	co_return protocols::fs::Error::illegalOperationTarget;
 }
 

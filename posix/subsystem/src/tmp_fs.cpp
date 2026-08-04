@@ -479,6 +479,7 @@ public:
 	pwrite(Process *, int64_t offset, const void *buffer, size_t length) override;
 
 	async::result<frg::expected<protocols::fs::Error>> truncate(size_t size) override;
+	async::result<frg::expected<protocols::fs::Error>> fsync(bool dataOnly) override;
 
 	async::result<frg::expected<protocols::fs::Error>> allocate(int64_t offset, size_t size) override;
 
@@ -755,6 +756,13 @@ MemoryFile::truncate(size_t size) {
 	auto node = static_cast<MemoryNode *>(associatedLink()->getTarget().get());
 
 	co_await node->_resizeFile(size);
+	co_return {};
+}
+
+async::result<frg::expected<protocols::fs::Error>>
+MemoryFile::fsync(bool) {
+	// tmpfs is memory-backed: a sync has nothing durable to flush. Report success
+	// (matching Linux fsync() on a tmpfs file), not the EINVAL File default for pipes.
 	co_return {};
 }
 

@@ -17,6 +17,9 @@ static bool logInitiateRetire = false;
 UserRequest::UserRequest(bool write_, uint64_t sector_, arch::dma_buffer_view view_)
 : write{write_}, sector{sector_}, view{view_} { }
 
+UserRequest::UserRequest()
+: isFlush{true} { }
+
 // --------------------------------------------------------
 // Device
 // --------------------------------------------------------
@@ -96,6 +99,16 @@ async::result<void> Device::writeSectors(uint64_t sector, arch::dma_buffer_view 
 	}
 }
 
+async::result<void> Device::flush() {
+	// Issue a VIRTIO_BLK_T_FLUSH: commit the device's volatile write cache to stable
+	// storage. No data payload; awaits completion so fsync() can report durability.
+	auto request = new UserRequest();
+	_pendingQueue.push(request);
+	_pendingDoorbell.raise();
+	co_await request->event.wait();
+	delete request;
+}
+
 async::result<size_t> Device::getSize() {
 	co_return _size * 512;
 }
@@ -109,21 +122,24 @@ async::detached Device::_processRequests() {
 
 		auto request = _pendingQueue.front();
 		_pendingQueue.pop();
-		auto numSectors = request->view.size() >> sectorShift;
-		assert(numSectors);
+		auto numSectors = request->isFlush ? size_t{0} : (request->view.size() >> sectorShift);
+		if(!request->isFlush)
+			assert(numSectors);
 
 		// Setup the descriptor for the request header.
 		virtio_core::Chain chain;
 		chain.append(co_await _requestQueue->obtainDescriptor());
 
 		auto header = virtRequestBuffer.object_view(chain.front().tableIndex());
-		if(request->write) {
+		if(request->isFlush) {
+			header->type = VIRTIO_BLK_T_FLUSH;
+		}else if(request->write) {
 			header->type = VIRTIO_BLK_T_OUT;
 		}else{
 			header->type = VIRTIO_BLK_T_IN;
 		}
 		header->reserved = 0;
-		header->sector = request->sector;
+		header->sector = request->isFlush ? uint64_t{0} : request->sector;
 
 		co_await chain.setupBuffer(virtio_core::hostToDevice, header.view_buffer());
 

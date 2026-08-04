@@ -306,6 +306,29 @@ public:
 		co_return {};
 	}
 
+	async::result<frg::expected<protocols::fs::Error>> fsync(bool dataOnly) override {
+		managarm::fs::FsyncRequest req;
+		req.set_data_only(dataOnly);
+
+		auto [offer, send_req, recv_resp]
+				= co_await helix_ng::exchangeMsgs(getPassthroughLane(),
+			helix_ng::offer(
+				helix_ng::sendBragiHeadOnly(req, frg::stl_allocator{}),
+				helix_ng::recvInline()
+			)
+		);
+		HEL_CHECK(offer.error());
+		HEL_CHECK(send_req.error());
+		HEL_CHECK(recv_resp.error());
+
+		managarm::fs::SvrResponse resp;
+		resp.ParseFromArray(recv_resp.data(), recv_resp.length());
+		recv_resp.reset();
+		if(resp.error() != managarm::fs::Errors::SUCCESS)
+			co_return resp.error() | protocols::fs::toFsProtoError;
+		co_return {};
+	}
+
 private:
 	helix::UniqueLane _control;
 	protocols::fs::File _file;

@@ -364,6 +364,9 @@ public:
 	ptTruncate(void *object, size_t size);
 
 	static async::result<frg::expected<protocols::fs::Error>>
+	ptFsync(void *object, bool dataOnly);
+
+	static async::result<frg::expected<protocols::fs::Error>>
 	ptAllocate(void *object, int64_t offset, size_t size);
 
 	static async::result<protocols::fs::Error>
@@ -447,6 +450,7 @@ public:
 		.setSocketOption = &ptSetSocketOption,
 		.getSocketOption = &ptGetSocketOption,
 		.shutdown = &ptShutdown,
+		.fsync = &ptFsync,
 	};
 
 	// ------------------------------------------------------------------------
@@ -557,6 +561,7 @@ public:
 			std::vector<smarter::shared_ptr<File, FileHandle>> files, struct ucred creds);
 
 	virtual async::result<frg::expected<protocols::fs::Error>> truncate(size_t size);
+	virtual async::result<frg::expected<protocols::fs::Error>> fsync(bool dataOnly);
 
 	virtual async::result<frg::expected<protocols::fs::Error>> allocate(int64_t offset, size_t size);
 

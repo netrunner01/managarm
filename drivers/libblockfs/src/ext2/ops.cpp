@@ -359,6 +359,39 @@ getLinkOrCreate(std::shared_ptr<void> object, std::string name, mode_t mode, boo
 	co_return protocols::fs::GetLinkResult{inode, inode->number, protocols::fs::FileType::regular};
 }
 
+// fsync/fdatasync: make the file's writes durable. Order matters (see WI-13): flush the
+// file's dirty DATA pages out of the managed page cache to the device, then (for fsync,
+// not fdatasync) the inode METADATA -- the size/block-map must be durable or the data
+// blocks are unreachable after a crash -- then issue a device cache FLUSH so the disk
+// controller commits its volatile write cache. Mirrors the data+inode sync in createSymlink.
+async::result<frg::expected<protocols::fs::Error>> fsyncFile(void *object, bool dataOnly) {
+	auto self = static_cast<ext2fs::OpenFile *>(object);
+	auto inode = std::static_pointer_cast<ext2fs::Inode>(self->inode);
+
+	co_await inode->readyEvent.wait();
+
+	co_await inode->inodeMutex.async_lock_shared();
+	frg::shared_lock inodeLock{frg::adopt_lock, inode->inodeMutex};
+
+	if(inode->fileMapping.size()) {
+		auto syncData = co_await helix_ng::synchronizeSpace(
+				helix::BorrowedDescriptor{kHelNullHandle},
+				inode->fileMapping.get(), inode->fileSize());
+		HEL_CHECK(syncData.error());
+	}
+
+	if(!dataOnly) {
+		auto syncInode = co_await helix_ng::synchronizeSpace(
+				helix::BorrowedDescriptor{kHelNullHandle},
+				inode->diskInode(), inode->fs.inodeSize);
+		HEL_CHECK(syncInode.error());
+	}
+
+	co_await inode->fs.device->flush();
+
+	co_return {};
+}
+
 } // namespace anonymous
 
 constinit protocols::fs::FileOperations fileOperations {
@@ -375,6 +408,7 @@ constinit protocols::fs::FileOperations fileOperations {
 	.flock        = &doFlock<FileSystem>,
 	.getFileFlags = &getFileFlags,
 	.setFileFlags = &setFileFlags,
+	.fsync        = &fsyncFile,
 };
 
 constinit protocols::fs::NodeOperations nodeOperations{

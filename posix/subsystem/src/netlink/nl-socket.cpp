@@ -376,6 +376,23 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::setSocketOption(int
 	} else if(layer == SOL_NETLINK && number == NETLINK_PKTINFO) {
 		auto val = *reinterpret_cast<int *>(optbuf.data());
 		pktinfo_ = (val != 0);
+	} else if(layer == SOL_NETLINK && number == NETLINK_DROP_MEMBERSHIP) {
+		// Mirror of NETLINK_ADD_MEMBERSHIP above: sd-netlink drops multicast groups it
+		// joined. Reject bad lengths/ids gracefully rather than asserting (DEF-31 / WI-06).
+		// (DEF-79)
+		if(optbuf.size() < sizeof(int))
+			co_return protocols::fs::Error::illegalArguments;
+		auto val = *reinterpret_cast<int *>(optbuf.data());
+		if(val < 0 || val >= MAX_SUPPORTED_GROUP_ID)
+			co_return protocols::fs::Error::illegalArguments;
+		auto it = globalGroupMap.find({_protocol, val});
+		if(it == globalGroupMap.end())
+			co_return protocols::fs::Error::illegalArguments;
+		auto group = it->second.get();
+		auto self = std::find(group->subscriptions.begin(), group->subscriptions.end(), this);
+		if(self != group->subscriptions.end())
+			group->subscriptions.erase(self);
+		joinedGroups_ &= ~(1u << val);
 	} else if(layer == SOL_SOCKET && number == SO_PASSCRED) {
 		if(optbuf.size() >= sizeof(int))
 			_passCreds = *reinterpret_cast<int *>(optbuf.data());
@@ -395,6 +412,20 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::getSocketOption(Pro
 	} else if(layer == SOL_SOCKET && number == SO_TYPE) {
 		optbuf.resize(std::min(optbuf.size(), sizeof(type_)));
 		memcpy(optbuf.data(), &type_, optbuf.size());
+	} else if(layer == SOL_NETLINK && number == NETLINK_LIST_MEMBERSHIPS) {
+		// Return the multicast group-membership bitmap as an array of uint32 words (Linux
+		// ABI). sd-netlink queries this at startup and during systemd-shutdown
+		// (netlink_socket_get_multicast_groups); the call MUST succeed, and a socket in no
+		// groups (len==0) satisfies its `if(len == 0) goto finalize` fast path -- which is
+		// every socket that only issues queries, as during shutdown's device detach. Our
+		// membership fits one word (MAX_SUPPORTED_GROUP_ID == 32, joinedGroups_ is uint32_t).
+		// (DEF-79)
+		if(joinedGroups_) {
+			optbuf.resize(sizeof(uint32_t));
+			memcpy(optbuf.data(), &joinedGroups_, sizeof(uint32_t));
+		} else {
+			optbuf.clear();
+		}
 	} else {
 		printf("posix nl-socket: unhandled getsockopt layer %d number %d\n", layer, number);
 		co_return protocols::fs::Error::invalidProtocolOption;

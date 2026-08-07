@@ -289,6 +289,13 @@ struct CpuinfoNode final : RegularNode {
 	async::result<void> store(std::string) override;
 };
 
+struct MeminfoNode final : RegularNode {
+	MeminfoNode() {}
+
+	async::result<std::expected<std::string, Error>> show(Process *) override;
+	async::result<void> store(std::string) override;
+};
+
 struct OstypeNode final : RegularNode {
 	OstypeNode() {}
 

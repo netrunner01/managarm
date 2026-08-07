@@ -309,6 +309,7 @@ std::shared_ptr<Link> DirectoryNode::createRootDirectory() {
 	the_node->directMkregular("loadavg", std::make_shared<LoadavgNode>());
 	the_node->directMkregular("stat", std::make_shared<SysStatNode>());
 	the_node->directMkregular("cpuinfo", std::make_shared<CpuinfoNode>());
+	the_node->directMkregular("meminfo", std::make_shared<MeminfoNode>());
 	the_node->directMknode("mounts", std::make_shared<MountsLink>());
 
 	auto sysLink = the_node->directMkdir("sys");
@@ -561,21 +562,50 @@ async::result<void> SysStatNode::store(std::string) {
 }
 
 async::result<std::expected<std::string, Error>> CpuinfoNode::show(Process *) {
-	// Minimal /proc/cpuinfo: one processor block. managarm does not expose the CPU count to
-	// posix yet (that arrives with the kernel-info hel call in round 2), so report a single
-	// CPU, which matches the single-vCPU boot. htop counts the "processor" lines.
+	// One processor block per CPU; the count comes from the kernel via helQueryKernelInfo.
+	// htop counts the "processor" lines.
+	HelKernelInfo info;
+	HEL_CHECK(helQueryKernelInfo(&info));
+	uint64_t cpus = info.cpuCount ? info.cpuCount : 1;
+
 	std::stringstream stream;
-	stream << "processor\t: 0\n";
-	stream << "vendor_id\t: Managarm\n";
-	stream << "model name\t: managarm virtual CPU\n";
-	stream << "cpu MHz\t\t: 0.000\n";
-	stream << "cache size\t: 0 KB\n";
-	stream << "\n";
+	for(uint64_t i = 0; i < cpus; i++) {
+		stream << "processor\t: " << i << "\n";
+		stream << "vendor_id\t: Managarm\n";
+		stream << "model name\t: managarm virtual CPU\n";
+		stream << "cpu MHz\t\t: 0.000\n";
+		stream << "cache size\t: 0 KB\n";
+		stream << "\n";
+	}
 	co_return stream.str();
 }
 
 async::result<void> CpuinfoNode::store(std::string) {
 	std::cout << "posix: Can't store to a /proc/cpuinfo file" << std::endl;
+	co_return;
+}
+
+async::result<std::expected<std::string, Error>> MeminfoNode::show(Process *) {
+	// Physical memory totals straight from the kernel (helQueryKernelInfo). managarm has no
+	// page-cache/buffer accounting yet, so Buffers/Cached are 0 and MemAvailable == MemFree.
+	HelKernelInfo info;
+	HEL_CHECK(helQueryKernelInfo(&info));
+	uint64_t totalKb = info.totalPages * info.pageSize / 1024;
+	uint64_t freeKb = info.freePages * info.pageSize / 1024;
+
+	std::stringstream stream;
+	stream << "MemTotal:       " << std::setw(8) << totalKb << " kB\n";
+	stream << "MemFree:        " << std::setw(8) << freeKb << " kB\n";
+	stream << "MemAvailable:   " << std::setw(8) << freeKb << " kB\n";
+	stream << "Buffers:               0 kB\n";
+	stream << "Cached:                0 kB\n";
+	stream << "SwapTotal:             0 kB\n";
+	stream << "SwapFree:              0 kB\n";
+	co_return stream.str();
+}
+
+async::result<void> MeminfoNode::store(std::string) {
+	std::cout << "posix: Can't store to a /proc/meminfo file" << std::endl;
 	co_return;
 }
 

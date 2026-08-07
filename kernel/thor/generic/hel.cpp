@@ -20,6 +20,7 @@
 #include <thor-internal/kernlet.hpp>
 #include <thor-internal/load-balancing.hpp>
 #include <thor-internal/physical.hpp>
+#include <thor-internal/schedule.hpp>
 #include <thor-internal/random.hpp>
 #include <thor-internal/stream.hpp>
 #include <thor-internal/thread.hpp>
@@ -1943,6 +1944,7 @@ HelError helQueryKernelInfo(HelKernelInfo *user_info) {
 	info.usedPages = physicalAllocator->numUsedPages();
 	info.cpuCount = getCpuCount();
 	info.pageSize = kPageSize;
+	info.busyNanos = getTotalBusyNanos();
 
 	if(!writeUserObject(user_info, info))
 		return kHelErrFault;

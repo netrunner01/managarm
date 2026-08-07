@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <atomic>
 
 #include <thor-internal/arch-generic/cpu.hpp>
 #include <thor-internal/arch-generic/ints.hpp>
@@ -21,6 +22,11 @@ namespace {
 
 	// Minimum length of a preemption time slice in ns.
 	constexpr int64_t sliceGranularity = 10'000'000;
+
+	// Cumulative busy CPU time across all CPUs, in nanoseconds: the summed run time of all
+	// regular scheduling entities. Idle time is uptime*cpus - this. Exposed via
+	// getTotalBusyNanos() for /proc/stat.
+	std::atomic<uint64_t> totalBusyNanos{0};
 
 	struct IdleTask final : ScheduleEntity {
 		IdleTask()
@@ -458,9 +464,16 @@ void Scheduler::_updateEntityStats(ScheduleEntity *entity) {
 	assert(entity->state == ScheduleState::active
 			|| entity == _current);
 
-	if(entity == _current)
-		entity->_runTime += _refClock - entity->_refClock;
+	if(entity == _current) {
+		auto delta = _refClock - entity->_refClock;
+		entity->_runTime += delta;
+		totalBusyNanos.fetch_add(delta, std::memory_order_relaxed);
+	}
 	entity->_refClock = _refClock;
+}
+
+uint64_t getTotalBusyNanos() {
+	return totalBusyNanos.load(std::memory_order_relaxed);
 }
 
 namespace {

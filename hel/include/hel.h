@@ -982,6 +982,8 @@ struct HelKernelInfo {
 	uint64_t usedPages;
 	uint64_t cpuCount;
 	uint64_t pageSize;
+	//! Cumulative busy CPU time across all CPUs, in nanoseconds (idle = uptime*cpuCount - this).
+	uint64_t busyNanos;
 };
 
 enum {

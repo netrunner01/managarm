@@ -251,6 +251,9 @@ private:
 
 // Similar to Scheduler::checkPreemption() but specialized for threads.
 void checkThreadPreemption();
+
+// Cumulative busy CPU time (ns) across all CPUs; idle = uptime*cpus - this. For /proc/stat.
+uint64_t getTotalBusyNanos();
 void checkThreadPreemption(FaultImageAccessor image);
 
 extern PerCpu<Scheduler> localScheduler;

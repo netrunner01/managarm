@@ -113,11 +113,11 @@ async::result<std::unique_ptr<drm_core::Configuration>> GfxDevice::initialize() 
 	attachConnector(_theConnector.get());
 
 	std::vector<drm_mode_modeinfo> supported_modes;
-	drm_core::addDmtModes(supported_modes, 1024, 768);
+	drm_core::addDmtModes(supported_modes, 1280, 1024);
 	_theConnector->setModeList(supported_modes);
 
 	setupMinDimensions(640, 480);
-	setupMaxDimensions(1024, 768);
+	setupMaxDimensions(1280, 1024);
 
 	_theConnector->setupPhysicalDimensions(306, 230);
 	_theConnector->setupSubpixel(0);

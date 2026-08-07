@@ -532,21 +532,35 @@ async::result<void> LoadavgNode::store(std::string) {
 }
 
 async::result<std::expected<std::string, Error>> SysStatNode::show(Process *) {
-	// System-wide /proc/stat. managarm does not yet track per-CPU busy/idle time, so report
-	// the machine as fully idle (idle = uptime in USER_HZ ticks) rather than emitting zeros
-	// that htop reads as a divide-by-zero. htop needs this file present to render its CPU
-	// meter at all. Fields per cpu line (man 5 proc): user nice system idle iowait irq
-	// softirq steal guest guest_nice.
+	// System-wide /proc/stat. Busy CPU time comes from the kernel (helQueryKernelInfo.busyNanos
+	// = summed run time of all scheduling entities); idle = uptime*cpuCount - busy. htop derives
+	// CPU% from the delta of these across refreshes. Fields per cpu line (man 5 proc): user nice
+	// system idle iowait irq softirq steal guest guest_nice -- we report all busy time as "user"
+	// (no user/system split yet).
 	constexpr uint64_t userHz = 100;
+	constexpr uint64_t nsPerTick = 1'000'000'000 / userHz;
+	HelKernelInfo info;
+	HEL_CHECK(helQueryKernelInfo(&info));
+	uint64_t cpus = info.cpuCount ? info.cpuCount : 1;
+
 	auto uptime = clk::getTimeSinceBoot();
-	uint64_t idleTicks = uint64_t(uptime.tv_sec) * userHz
-			+ uint64_t(uptime.tv_nsec) / (1'000'000'000 / userHz);
+	uint64_t uptimeTicks = uint64_t(uptime.tv_sec) * userHz + uint64_t(uptime.tv_nsec) / nsPerTick;
+	uint64_t totalTicks = uptimeTicks * cpus;
+	uint64_t busyTicks = info.busyNanos / nsPerTick;
+	if(busyTicks > totalTicks)
+		busyTicks = totalTicks;
+	uint64_t idleTicks = totalTicks - busyTicks;
+
 	auto realtime = clk::getRealtime();
 	uint64_t btime = uint64_t(realtime.tv_sec) - uint64_t(uptime.tv_sec);
 
 	std::stringstream stream;
-	stream << "cpu  0 0 0 " << idleTicks << " 0 0 0 0 0 0\n";
-	stream << "cpu0 0 0 0 " << idleTicks << " 0 0 0 0 0 0\n";
+	stream << "cpu  " << busyTicks << " 0 0 " << idleTicks << " 0 0 0 0 0 0\n";
+	for(uint64_t i = 0; i < cpus; i++) {
+		uint64_t cpuBusy = busyTicks / cpus;
+		uint64_t cpuIdle = (uptimeTicks >= cpuBusy) ? uptimeTicks - cpuBusy : 0;
+		stream << "cpu" << i << " " << cpuBusy << " 0 0 " << cpuIdle << " 0 0 0 0 0 0\n";
+	}
 	stream << "intr 0\n";
 	stream << "ctxt 0\n";
 	stream << "btime " << btime << "\n";

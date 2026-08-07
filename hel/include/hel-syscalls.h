@@ -240,6 +240,11 @@ extern inline __attribute__ (( always_inline )) HelError helQueryThreadStats(Hel
 	return helSyscall2(kHelCallQueryThreadStats, (HelWord)handle, (HelWord)stats);
 };
 
+extern inline __attribute__ (( always_inline )) HelError helQueryKernelInfo(
+		struct HelKernelInfo *info) {
+	return helSyscall1(kHelCallQueryKernelInfo, (HelWord)info);
+};
+
 extern inline __attribute__ (( always_inline )) HelError helYield() {
 	return helSyscall0(kHelCallYield);
 };

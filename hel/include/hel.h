@@ -108,6 +108,7 @@ enum {
 	kHelCallSetAffinity = 100,
 
 	kHelCallCreateToken = 104,
+	kHelCallQueryKernelInfo = 108,
 
 	kHelCallSuper = 0x80000000
 };
@@ -974,6 +975,15 @@ struct HelThreadStats {
 	uint64_t userTime;
 };
 
+//! System-wide kernel statistics, as returned by @ref helQueryKernelInfo.
+struct HelKernelInfo {
+	uint64_t totalPages;
+	uint64_t freePages;
+	uint64_t usedPages;
+	uint64_t cpuCount;
+	uint64_t pageSize;
+};
+
 enum {
   kHelVmexitHlt = 0,
   kHelVmexitTranslationFault = 1,
@@ -1302,6 +1312,11 @@ HEL_C_LINKAGE HelError helCreateThread(HelHandle universe, HelHandle spaceHandle
 //! @param[out] stats
 //!     Statistics related to the thread.
 HEL_C_LINKAGE HelError helQueryThreadStats(HelHandle handle, struct HelThreadStats *stats);
+
+//! Query system-wide kernel statistics (physical memory, CPU count).
+//! \param[out] info
+//!     System-wide kernel information.
+HEL_C_LINKAGE HelError helQueryKernelInfo(struct HelKernelInfo *info);
 
 //! Set the priority of a thread.
 //!

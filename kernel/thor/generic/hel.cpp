@@ -1935,6 +1935,21 @@ HelError helQueryThreadStats(HelHandle handle, HelThreadStats *user_stats) {
 	return kHelErrNone;
 }
 
+HelError helQueryKernelInfo(HelKernelInfo *user_info) {
+	HelKernelInfo info;
+	memset(&info, 0, sizeof(HelKernelInfo));
+	info.totalPages = physicalAllocator->numTotalPages();
+	info.freePages = physicalAllocator->numFreePages();
+	info.usedPages = physicalAllocator->numUsedPages();
+	info.cpuCount = getCpuCount();
+	info.pageSize = kPageSize;
+
+	if(!writeUserObject(user_info, info))
+		return kHelErrFault;
+
+	return kHelErrNone;
+}
+
 HelError helSetPriority(HelHandle handle, int priority) {
 	auto this_thread = getCurrentThread();
 	auto this_universe = this_thread->getUniverse();

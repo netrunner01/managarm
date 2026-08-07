@@ -306,6 +306,9 @@ std::shared_ptr<Link> DirectoryNode::createRootDirectory() {
 	the_node->_entries.insert(std::move(self_thread_link));
 
 	the_node->directMkregular("uptime", std::make_shared<UptimeNode>());
+	the_node->directMkregular("loadavg", std::make_shared<LoadavgNode>());
+	the_node->directMkregular("stat", std::make_shared<SysStatNode>());
+	the_node->directMkregular("cpuinfo", std::make_shared<CpuinfoNode>());
 	the_node->directMknode("mounts", std::make_shared<MountsLink>());
 
 	auto sysLink = the_node->directMkdir("sys");
@@ -510,6 +513,69 @@ async::result<std::expected<std::string, Error>> UptimeNode::show(Process *) {
 async::result<void> UptimeNode::store(std::string) {
 	// TODO: proper error reporting.
 	std::cout << "posix: Can't store to a /proc/uptime file" << std::endl;
+	co_return;
+}
+
+async::result<std::expected<std::string, Error>> LoadavgNode::show(Process *) {
+	// managarm does not track load average yet. Report a stable "0.00" rather than leaving
+	// the file absent, which makes htop/top/uptime print "nan". Fields (see man 5 proc):
+	// 1/5/15-minute load, runnable/total tasks, last pid.
+	std::stringstream stream;
+	stream << "0.00 0.00 0.00 1/1 1\n";
+	co_return stream.str();
+}
+
+async::result<void> LoadavgNode::store(std::string) {
+	std::cout << "posix: Can't store to a /proc/loadavg file" << std::endl;
+	co_return;
+}
+
+async::result<std::expected<std::string, Error>> SysStatNode::show(Process *) {
+	// System-wide /proc/stat. managarm does not yet track per-CPU busy/idle time, so report
+	// the machine as fully idle (idle = uptime in USER_HZ ticks) rather than emitting zeros
+	// that htop reads as a divide-by-zero. htop needs this file present to render its CPU
+	// meter at all. Fields per cpu line (man 5 proc): user nice system idle iowait irq
+	// softirq steal guest guest_nice.
+	constexpr uint64_t userHz = 100;
+	auto uptime = clk::getTimeSinceBoot();
+	uint64_t idleTicks = uint64_t(uptime.tv_sec) * userHz
+			+ uint64_t(uptime.tv_nsec) / (1'000'000'000 / userHz);
+	auto realtime = clk::getRealtime();
+	uint64_t btime = uint64_t(realtime.tv_sec) - uint64_t(uptime.tv_sec);
+
+	std::stringstream stream;
+	stream << "cpu  0 0 0 " << idleTicks << " 0 0 0 0 0 0\n";
+	stream << "cpu0 0 0 0 " << idleTicks << " 0 0 0 0 0 0\n";
+	stream << "intr 0\n";
+	stream << "ctxt 0\n";
+	stream << "btime " << btime << "\n";
+	stream << "processes 0\n";
+	stream << "procs_running 1\n";
+	stream << "procs_blocked 0\n";
+	co_return stream.str();
+}
+
+async::result<void> SysStatNode::store(std::string) {
+	std::cout << "posix: Can't store to a /proc/stat file" << std::endl;
+	co_return;
+}
+
+async::result<std::expected<std::string, Error>> CpuinfoNode::show(Process *) {
+	// Minimal /proc/cpuinfo: one processor block. managarm does not expose the CPU count to
+	// posix yet (that arrives with the kernel-info hel call in round 2), so report a single
+	// CPU, which matches the single-vCPU boot. htop counts the "processor" lines.
+	std::stringstream stream;
+	stream << "processor\t: 0\n";
+	stream << "vendor_id\t: Managarm\n";
+	stream << "model name\t: managarm virtual CPU\n";
+	stream << "cpu MHz\t\t: 0.000\n";
+	stream << "cache size\t: 0 KB\n";
+	stream << "\n";
+	co_return stream.str();
+}
+
+async::result<void> CpuinfoNode::store(std::string) {
+	std::cout << "posix: Can't store to a /proc/cpuinfo file" << std::endl;
 	co_return;
 }
 

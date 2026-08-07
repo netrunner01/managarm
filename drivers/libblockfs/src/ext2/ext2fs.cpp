@@ -1381,8 +1381,16 @@ async::detached FileSystem::manageFileData(std::shared_ptr<Inode> inode) {
 				co_await inode->fs.writeDataBlocks(inode, blockOffset, fileView);
 			}
 
-			HEL_CHECK(helUpdateMemory(inode->backingMemory, kHelManageWriteback,
-					manage.offset(), manage.length()));
+			// The backing memory may have shrunk (e.g. a concurrent truncate)
+			// between thor queuing this writeback and us completing it, leaving
+			// this page beyond the current end of the backing memory; thor then
+			// rejects the update with kHelErrIllegalArgs. The page is past EOF so
+			// its data is no longer part of the file - drop the writeback instead
+			// of panicking the shared block server (DEF-91).
+			auto writebackError = helUpdateMemory(inode->backingMemory, kHelManageWriteback,
+					manage.offset(), manage.length());
+			if(writebackError != kHelErrIllegalArgs)
+				HEL_CHECK(writebackError);
 		}
 
 		ostContext.emit(

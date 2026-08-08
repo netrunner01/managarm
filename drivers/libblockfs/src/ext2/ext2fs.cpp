@@ -797,51 +797,63 @@ async::result<frg::expected<protocols::fs::Error>>
 Inode::resizeFile(size_t newSize) {
 	auto oldSize = fileSize();
 
+	if (newSize == oldSize) {
+		// Nothing to do.
+		co_return frg::success;
+	}
+
 	if (newSize > oldSize) {
 		// TODO(qookie): Technically we only need to assign 0
 		// blocks here, not allocate new ones. We also should
 		// zero out the new blocks.
 		FRG_CO_TRY(co_await ensureBackingBlocks(oldSize, newSize - oldSize));
-	} else if (newSize < oldSize) {
-		auto disk_inode = diskInode();
-		// We can only free blocks we can enumerate. Walking the indirect and extent
-		// trees is not implemented yet (DEF-80), so restrict freeing to files that
-		// live entirely in the 12 direct block slots; any file with indirect/extent
-		// blocks keeps the old (leaking) behaviour rather than a partial free that
-		// would leave the inode's block map inconsistent.
-		if (!usesExtents && fileType == kTypeRegular && oldSize <= 12 * size_t(fs.blockSize)) {
-			// Number of leading blocks that stay in the file; indices >= this are freed.
-			size_t keepBlocks = (newSize + fs.blockSize - 1) / fs.blockSize;
-
-			co_await blockMapMutex.async_lock();
-			frg::unique_lock blockMapLock{frg::adopt_lock, blockMapMutex};
-
-			std::vector<uint32_t> freed;
-			for (size_t i = keepBlocks; i < 12; i++) {
-				if (!disk_inode->data.blocks.direct[i])
-					continue;
-				freed.push_back(disk_inode->data.blocks.direct[i]);
-				disk_inode->data.blocks.direct[i] = 0;
-			}
-
-			if (!freed.empty()) {
-				co_await fs.freeBlocks(freed);
-				disk_inode->blocks -= freed.size() * (fs.blockSize / 512);
-			}
-		} else {
-			// TODO(qookie/DEF-80): free blocks in the indirect/extent trees.
-			std::println("libblockfs: Shrinking an Ext2 file does not free data blocks!");
-		}
-	} else if (newSize == oldSize) {
-		// Nothing to do.
-		co_return frg::success;
 	}
 
-	auto resizeResult = co_await helix_ng::resizeMemory(
-			helix::BorrowedDescriptor{backingMemory},
-			(newSize + 0xFFF) & ~size_t(0xFFF));
-	HEL_CHECK(resizeResult.error());
-	setFileSize(newSize);
+	{
+		// Hold blockMapMutex across the block-map mutation, the backing resize and
+		// the fileSize() update so the writeback handler (manageFileData) can never
+		// observe a shrunk backing together with a stale fileSize(). That transient
+		// is what let a truncated writeback import a range past the shrunk backing
+		// and panic the shared block server (DEF-91/KP-45); the handler takes the
+		// same lock and re-checks fileSize() before importing.
+		co_await blockMapMutex.async_lock();
+		frg::unique_lock blockMapLock{frg::adopt_lock, blockMapMutex};
+
+		if (newSize < oldSize) {
+			auto disk_inode = diskInode();
+			// We can only free blocks we can enumerate. Walking the indirect and extent
+			// trees is not implemented yet (DEF-80), so restrict freeing to files that
+			// live entirely in the 12 direct block slots; any file with indirect/extent
+			// blocks keeps the old (leaking) behaviour rather than a partial free that
+			// would leave the inode's block map inconsistent.
+			if (!usesExtents && fileType == kTypeRegular && oldSize <= 12 * size_t(fs.blockSize)) {
+				// Number of leading blocks that stay in the file; indices >= this are freed.
+				size_t keepBlocks = (newSize + fs.blockSize - 1) / fs.blockSize;
+
+				std::vector<uint32_t> freed;
+				for (size_t i = keepBlocks; i < 12; i++) {
+					if (!disk_inode->data.blocks.direct[i])
+						continue;
+					freed.push_back(disk_inode->data.blocks.direct[i]);
+					disk_inode->data.blocks.direct[i] = 0;
+				}
+
+				if (!freed.empty()) {
+					co_await fs.freeBlocks(freed);
+					disk_inode->blocks -= freed.size() * (fs.blockSize / 512);
+				}
+			} else {
+				// TODO(qookie/DEF-80): free blocks in the indirect/extent trees.
+				std::println("libblockfs: Shrinking an Ext2 file does not free data blocks!");
+			}
+		}
+
+		auto resizeResult = co_await helix_ng::resizeMemory(
+				helix::BorrowedDescriptor{backingMemory},
+				(newSize + 0xFFF) & ~size_t(0xFFF));
+		HEL_CHECK(resizeResult.error());
+		setFileSize(newSize);
+	}
 
 	updateInodeChecksum(fs, diskInode(), number);
 
@@ -1394,10 +1406,23 @@ async::detached FileSystem::manageFileData(std::shared_ptr<Inode> inode) {
 				&manage, helix::Dispatcher::global());
 		co_await submit.async_wait();
 		HEL_CHECK(manage.error());
+
+		// Serialize the whole service (skip-check, import, disk I/O and completion)
+		// against truncate (resizeFile) via the per-inode blockMapMutex. With the
+		// lock held the fileSize() we test in the skip-check is consistent with the
+		// backing size, so a writeback whose range was truncated away is skipped
+		// BEFORE it imports a range past the shrunk backing - which used to panic
+		// the shared block server at importMemory ("Buffer too small") or get
+		// rejected at helUpdateMemory (kHelErrIllegalArgs). (DEF-91/KP-45.)
+		co_await inode->blockMapMutex.async_lock();
+		frg::unique_lock blockMapLock{frg::adopt_lock, inode->blockMapMutex};
+
 		if(manage.type() == kHelManageInitialize) {
 			assert(manage.offset() + manage.length() <= ((inode->fileSize() + 0xFFF) & ~size_t(0xFFF)));
 		}else{
 			if(!(manage.offset() + manage.length() <= ((inode->fileSize() + 0xFFF) & ~size_t(0xFFF)))) {
+				// The range was truncated away (resizeFile shrank fileSize under
+				// the lock we hold); its pages are past EOF, so drop the writeback.
 				continue;
 			}
 		}
@@ -1413,11 +1438,7 @@ async::detached FileSystem::manageFileData(std::shared_ptr<Inode> inode) {
 			size_t num_blocks = (backed_size + (inode->fs.blockSize - 1)) / inode->fs.blockSize;
 			assert(num_blocks * inode->fs.blockSize <= manage.length());
 
-			{
-				co_await inode->blockMapMutex.async_lock();
-				frg::unique_lock blockMapLock{frg::adopt_lock, inode->blockMapMutex};
-				co_await inode->fs.readDataBlocks(inode, manage.offset() / inode->fs.blockSize, fileView);
-			}
+			co_await inode->fs.readDataBlocks(inode, manage.offset() / inode->fs.blockSize, fileView);
 
 			HEL_CHECK(helUpdateMemory(inode->backingMemory, kHelManageInitialize,
 					manage.offset(), manage.length()));
@@ -1431,28 +1452,19 @@ async::detached FileSystem::manageFileData(std::shared_ptr<Inode> inode) {
 
 			assert(numBlocks * inode->fs.blockSize <= manage.length());
 
-			{
-				co_await inode->blockMapMutex.async_lock();
-				frg::unique_lock blockMapLock{frg::adopt_lock, inode->blockMapMutex};
-				// TODO(DEF-32): mmap writeback is a background coroutine with no client
-				// error channel, so a full disk still aborts here. In practice blocks are
-				// reserved earlier via ensureBackingBlocks(), which now returns -ENOSPC
-				// before writeback runs, so this is rarely reached on the write() path.
-				auto assignResult = co_await inode->fs.assignDataBlocks(inode.get(), blockOffset, numBlocks);
-				assert(assignResult && "Out of disk space");
-				co_await inode->fs.writeDataBlocks(inode, blockOffset, fileView);
-			}
+			// TODO(DEF-32): mmap writeback is a background coroutine with no client
+			// error channel, so a full disk still aborts here. In practice blocks are
+			// reserved earlier via ensureBackingBlocks(), which now returns -ENOSPC
+			// before writeback runs, so this is rarely reached on the write() path.
+			auto assignResult = co_await inode->fs.assignDataBlocks(inode.get(), blockOffset, numBlocks);
+			assert(assignResult && "Out of disk space");
+			co_await inode->fs.writeDataBlocks(inode, blockOffset, fileView);
 
-			// The backing memory may have shrunk (e.g. a concurrent truncate)
-			// between thor queuing this writeback and us completing it, leaving
-			// this page beyond the current end of the backing memory; thor then
-			// rejects the update with kHelErrIllegalArgs. The page is past EOF so
-			// its data is no longer part of the file - drop the writeback instead
-			// of panicking the shared block server (DEF-91).
-			auto writebackError = helUpdateMemory(inode->backingMemory, kHelManageWriteback,
-					manage.offset(), manage.length());
-			if(writebackError != kHelErrIllegalArgs)
-				HEL_CHECK(writebackError);
+			// With the writeback serialized against truncate above, the backing can
+			// no longer shrink under us between the skip-check and here, so the
+			// kHelErrIllegalArgs toleration that DEF-91 added is now unreachable.
+			HEL_CHECK(helUpdateMemory(inode->backingMemory, kHelManageWriteback,
+					manage.offset(), manage.length()));
 		}
 
 		ostContext.emit(

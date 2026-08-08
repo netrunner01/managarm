@@ -151,16 +151,36 @@ public:
 		if(!_isInherited && _nameType == NameType::path)
 			std::erase_if(globalBindMap, [this](const auto &e) { return e.second == this; });
 
+		// Clear the raw _remote of any datagram sockets that connect()ed to us, so a
+		// later send() on them cannot dereference our freed memory (DEF-92/DEF-85(b)).
+		// A non-State::connected datagram server never hit the mutual-clear below.
+		for(auto *peer : _dgramPeers)
+			if(peer->_remote == this) {
+				peer->_remote = nullptr;
+				// Keep the peer's state consistent (not "connected with a null _remote"):
+				// its default peer is gone, like a remote shutdown.
+				peer->_currentState = State::remoteShutDown;
+			}
+		_dgramPeers.clear();
+		// If we are a datagram client, deregister from our server's list so it does not
+		// later touch our freed memory (_remote is already null if the server closed first).
+		if(_remote && socktype_ == SOCK_DGRAM)
+			std::erase(_remote->_dgramPeers, this);
+
 		if(_currentState == State::connected) {
 			auto rf = _remote;
-			if(logSockets)
-				std::cout << "posix: Remote \e[1;34m" << rf->structName() << "\e[0m" << std::endl;
-			rf->_currentState = State::remoteShutDown;
-			if(socktype_ == SOCK_STREAM) {
-				rf->_hupSeq = ++rf->_currentSeq;
-				rf->_statusBell.raise();
+			// rf may be null: a datagram server that closed first already cleared our
+			// _remote (the DEF-92 fix above), leaving us State::connected with no peer.
+			if(rf) {
+				if(logSockets)
+					std::cout << "posix: Remote \e[1;34m" << rf->structName() << "\e[0m" << std::endl;
+				rf->_currentState = State::remoteShutDown;
+				if(socktype_ == SOCK_STREAM) {
+					rf->_hupSeq = ++rf->_currentSeq;
+					rf->_statusBell.raise();
+				}
+				rf->_remote = nullptr;
 			}
-			rf->_remote = nullptr;
 			_remote = nullptr;
 		}
 		_currentState = State::closed;
@@ -701,6 +721,8 @@ public:
 				// missing this SOCK_DGRAM branch for abstract names).
 				_remote = server;
 				_currentState = State::connected;
+				// Register with the server so it clears our _remote if it closes first.
+				server->_dgramPeers.push_back(this);
 			}
 
 			co_return protocols::fs::Error::none;
@@ -747,6 +769,8 @@ public:
 				assert(_remote != nullptr);
 			} else if(socktype_ == SOCK_DGRAM) {
 				_remote = server;
+				// Register with the server so it clears our _remote if it closes first.
+				server->_dgramPeers.push_back(this);
 				// POSIX 1003.1-2024: Note that despite no connection being made, the term "connected"
 				// is used to describe a connectionless-mode socket for which a peer address has been set.
 				_currentState = State::connected;
@@ -1019,6 +1043,10 @@ private:
 
 	// For connected sockets, this is the socket we are connected to.
 	OpenFile *_remote;
+	// Datagram sockets that connect()ed to us (their _remote == this). We hold no
+	// reference to them, but we MUST clear their raw _remote when we close, or a
+	// later send() on them dereferences our freed memory (DEF-92 / DEF-85(b)).
+	std::vector<OpenFile *> _dgramPeers;
 
 	// Socket options.
 	bool _passCreds;

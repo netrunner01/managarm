@@ -887,6 +887,22 @@ async::result<std::expected<std::string, Error>> StatNode::show(Process *) {
 	if (!p)
 		co_return std::unexpected(Error::noSuchProcess);
 
+	// Memory accounting: vsize is the sum of the mapped areas (posix's own VmContext record);
+	// rss (physical pages backing the space) is tracked by thor and read via helQuerySpaceStats.
+	// A process without an address space (e.g. one mid-teardown) has a null VmContext, and htop
+	// reads /proc/<pid>/stat for *every* process, so guard against it and report 0.
+	size_t vsizeBytes = 0;
+	uint64_t rssPages = 0;
+	if(auto vmctx = p->vmContext(); vmctx) {
+		for(auto area : *vmctx)
+			vsizeBytes += area.size();
+		HelSpaceStats spaceStats;
+		HEL_CHECK(helQuerySpaceStats(vmctx->getSpace().getHandle(), &spaceStats));
+		HelKernelInfo kernelInfo;
+		HEL_CHECK(helQueryKernelInfo(&kernelInfo));
+		rssPages = spaceStats.rss / kernelInfo.pageSize;
+	}
+
 	// Everything that has a value of 0 is likely not implemented yet.
 	// See man 5 proc for more details.
 	// Based on the man page from Linux man-pages 6.01, updated on 2022-10-09.
@@ -909,7 +925,9 @@ async::result<std::expected<std::string, Error>> StatNode::show(Process *) {
 	stream << "0 "; // cminflt
 	stream << "0 "; // majflt
 	stream << "0 "; // cmajflt
-	stream << p->threadGroup()->accumulatedUsage().userTime << " "; // utime
+	// utime is in clock ticks of _SC_CLK_TCK, which mlibc reports as 1000000 (microseconds);
+	// userTime accumulates thor runTime() which is nanoseconds, so divide by 1000.
+	stream << (p->threadGroup()->accumulatedUsage().userTime / 1000) << " "; // utime
 	stream << "0 "; // stime
 	stream << "0 "; // cutime
 	stream << "0 "; // cstime
@@ -918,8 +936,8 @@ async::result<std::expected<std::string, Error>> StatNode::show(Process *) {
 	stream << "1 "; // num_threads
 	stream << "0 "; // itrealvalue
 	stream << "0 "; // starttime
-	stream << "0 "; // vsize
-	stream << "0 "; // rss
+	stream << vsizeBytes << " "; // vsize (bytes)
+	stream << rssPages << " "; // rss (pages)
 	stream << "0 "; // rsslim
 	stream << "0 "; // startcode
 	stream << "0 "; // endcode
@@ -968,13 +986,31 @@ async::result<frg::expected<Error, FileStats>> StatNode::getStats() {
 StatmNode::StatmNode(Process *process) : _process(process->weak_from_this()) {}
 
 async::result<std::expected<std::string, Error>> StatmNode::show(Process *) {
-	(void)_process;
-	// All hardcoded to 0.
-	// See man 5 proc for more details.
-	// Based on the man page from Linux man-pages 6.01, updated on 2022-10-09.
+	auto p = _process.lock();
+	if (!p)
+		co_return std::unexpected(Error::noSuchProcess);
+
+	// size = total mapped virtual pages (posix's VmContext record); resident = physical pages
+	// backing the space (thor, via helQuerySpaceStats). The rest (shared/text/lib/data) stay 0:
+	// managarm has no shared/section accounting yet. A process mid-teardown has a null VmContext
+	// and htop reads statm for every process, so guard against it. See man 5 proc.
+	size_t sizePages = 0;
+	uint64_t residentPages = 0;
+	if(auto vmctx = p->vmContext(); vmctx) {
+		size_t vsizeBytes = 0;
+		for(auto area : *vmctx)
+			vsizeBytes += area.size();
+		HelSpaceStats spaceStats;
+		HEL_CHECK(helQuerySpaceStats(vmctx->getSpace().getHandle(), &spaceStats));
+		HelKernelInfo kernelInfo;
+		HEL_CHECK(helQueryKernelInfo(&kernelInfo));
+		sizePages = vsizeBytes / kernelInfo.pageSize;
+		residentPages = spaceStats.rss / kernelInfo.pageSize;
+	}
+
 	std::stringstream stream;
-	stream << "0 "; // size
-	stream << "0 "; // resident
+	stream << sizePages << " "; // size (pages)
+	stream << residentPages << " "; // resident (pages)
 	stream << "0 "; // shared
 	stream << "0 "; // text
 	stream << "0 "; // lib

@@ -7,10 +7,56 @@
 #include "../tmp_fs.hpp"
 #include "../cgroupfs.hpp"
 #include <unistd.h>
+#include <sys/reboot.h>
+#include <async/basic.hpp>
+#include <helix/timer.hpp>
 #include <kerncfg.bragi.hpp>
 #include <hw.bragi.hpp>
 
 namespace requests {
+
+namespace {
+
+bool shutdownWatchdogArmed = false;
+
+// TEMPORARY WORKAROUND -- NOT FOR PRODUCTION. This papers over DEF-79 (systemd-shutdown
+// wedging on unimplemented low-level operations in its final umount/detach phase) instead of
+// fixing it: it forces a poweroff after a fixed grace period rather than letting shutdown
+// complete on its own. The real fix is to implement the missing operations so
+// reboot(RB_POWER_OFF) is reached normally; this should be removed once that lands. Retained
+// only so a graceful `systemctl poweroff` actually powers the machine off during the desktop
+// investigation.
+//
+// systemd-shutdown enables Ctrl-Alt-Del (reboot(RB_ENABLE_CAD)) right after "Shutting down.",
+// immediately before its final umount/detach loop -- the phase that wedges. By that point all
+// graceful userspace work (services stopped, filesystems unmounted per the shutdown targets)
+// is already done, so if the normal reboot(RB_POWER_OFF) has not arrived within the grace
+// period we force the poweroff ourselves through the same pm-interface path. This mirrors what
+// CAD itself is for: a safety valve to force-terminate a hung shutdown.
+async::result<void> shutdownWatchdog() {
+	co_await helix::sleepFor(15'000'000'000); // 15 s grace
+	std::cout << "posix: shutdown watchdog -- systemd-shutdown did not reach reboot(); forcing poweroff" << std::endl;
+
+	// Let that line actually reach the console before we halt: the poweroff below is the last
+	// thing the machine does, and an S5 that races it drops the final debug output, leaving an
+	// unexplained poweroff in the log. A short delay guarantees the "why" is recorded.
+	co_await helix::sleepFor(250'000'000); // 250 ms
+
+	// Fire-and-forget: thor powers the machine off from a scheduled work item and sends no
+	// reboot response, so we must not wait for one (waiting would race the poweroff).
+	managarm::hw::RebootRequest hwRequest;
+	hwRequest.set_cmd(RB_POWER_OFF);
+	auto [offer, hwSendResp] = co_await helix_ng::exchangeMsgs(
+		getPmLane(),
+		helix_ng::offer(
+			helix_ng::sendBragiHeadOnly(hwRequest, frg::stl_allocator{})
+		)
+	);
+	HEL_CHECK(offer.error());
+	HEL_CHECK(hwSendResp.error());
+}
+
+} // namespace
 
 async::result<std::expected<void, DispatchError>>
 HandleRequest::operator()(managarm::posix::RebootRequest &&req,
@@ -23,6 +69,30 @@ HandleRequest::operator()(managarm::posix::RebootRequest &&req,
 
 	if(self->threadGroup()->uid() != 0) {
 		co_await sendErrorResponse<managarm::posix::RebootResponse>(conversation, managarm::posix::Errors::INSUFFICIENT_PERMISSION);
+		co_return {};
+	}
+
+	// thor has no Ctrl-Alt-Del to toggle; don't forward CAD commands to it. RB_ENABLE_CAD,
+	// which mlibc forwards here because systemd-shutdown issues it right before its
+	// (wedge-prone) final phase, arms the poweroff watchdog. Both CAD toggles answer success,
+	// as they do on Linux.
+	// Compare the low 32 bits: the wire field is int64 but reboot(2) commands are 32-bit, and
+	// RB_ENABLE_CAD (0x89abcdef) sign-extends to a negative int64 that would not match the
+	// unsigned macro directly.
+	auto rebootCmd = static_cast<uint32_t>(req.cmd());
+	if(rebootCmd == RB_ENABLE_CAD || rebootCmd == RB_DISABLE_CAD) {
+		if(rebootCmd == RB_ENABLE_CAD && !shutdownWatchdogArmed) {
+			shutdownWatchdogArmed = true;
+			async::detach(shutdownWatchdog());
+		}
+
+		managarm::posix::RebootResponse resp;
+		resp.set_error(managarm::posix::Errors::SUCCESS);
+		auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
+			helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
+		);
+		HEL_CHECK(send_resp.error());
+		logBragiReply(resp);
 		co_return {};
 	}
 

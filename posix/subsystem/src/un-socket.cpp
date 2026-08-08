@@ -678,20 +678,30 @@ public:
 			if(!abstractSocketsBindMap.contains(path))
 				co_return protocols::fs::Error::connectionRefused;
 			auto server = abstractSocketsBindMap.at(path);
-			server->_acceptQueue.push_back(this);
-			server->_inSeq = ++server->_currentSeq;
-			server->_statusBell.raise();
+			if(socktype_ == SOCK_STREAM) {
+				server->_acceptQueue.push_back(this);
+				server->_inSeq = ++server->_currentSeq;
+				server->_statusBell.raise();
 
-			co_await async::race_and_cancel(
-				async::lambda([&](async::cancellation_token c) { return raceSendTimeout(c); }),
-				async::lambda([&](async::cancellation_token c) -> async::result<void> {
-					while (_currentState == State::null && !c.is_cancellation_requested())
-						co_await _statusBell.async_wait(c);
-				})
-			);
+				co_await async::race_and_cancel(
+					async::lambda([&](async::cancellation_token c) { return raceSendTimeout(c); }),
+					async::lambda([&](async::cancellation_token c) -> async::result<void> {
+						while (_currentState == State::null && !c.is_cancellation_requested())
+							co_await _statusBell.async_wait(c);
+					})
+				);
 
-			if(_currentState != State::connected)
-				co_return protocols::fs::Error::wouldBlock;
+				if(_currentState != State::connected)
+					co_return protocols::fs::Error::wouldBlock;
+			} else if(socktype_ == SOCK_DGRAM) {
+				// A datagram server never accept()s, so do NOT push onto its accept
+				// queue and wait for a handshake (that blocks connect() until the
+				// send-timeout). connect(2) on a datagram socket only records the
+				// default peer; mirror the pathname path (the accept-wait above was
+				// missing this SOCK_DGRAM branch for abstract names).
+				_remote = server;
+				_currentState = State::connected;
+			}
 
 			co_return protocols::fs::Error::none;
 		} else {

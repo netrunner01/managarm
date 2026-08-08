@@ -109,6 +109,7 @@ enum {
 
 	kHelCallCreateToken = 104,
 	kHelCallQueryKernelInfo = 108,
+	kHelCallQuerySpaceStats = 109,
 
 	kHelCallSuper = 0x80000000
 };
@@ -986,6 +987,12 @@ struct HelKernelInfo {
 	uint64_t busyNanos;
 };
 
+//! Per-address-space statistics, as returned by @ref helQuerySpaceStats.
+struct HelSpaceStats {
+	//! Resident set size in bytes (physical memory currently backing the space).
+	uint64_t rss;
+};
+
 enum {
   kHelVmexitHlt = 0,
   kHelVmexitTranslationFault = 1,
@@ -1319,6 +1326,7 @@ HEL_C_LINKAGE HelError helQueryThreadStats(HelHandle handle, struct HelThreadSta
 //! \param[out] info
 //!     System-wide kernel information.
 HEL_C_LINKAGE HelError helQueryKernelInfo(struct HelKernelInfo *info);
+HEL_C_LINKAGE HelError helQuerySpaceStats(HelHandle space, struct HelSpaceStats *stats);
 
 //! Set the priority of a thread.
 //!

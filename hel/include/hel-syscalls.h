@@ -245,6 +245,11 @@ extern inline __attribute__ (( always_inline )) HelError helQueryKernelInfo(
 	return helSyscall1(kHelCallQueryKernelInfo, (HelWord)info);
 };
 
+extern inline __attribute__ (( always_inline )) HelError helQuerySpaceStats(HelHandle space,
+		struct HelSpaceStats *stats) {
+	return helSyscall2(kHelCallQuerySpaceStats, (HelWord)space, (HelWord)stats);
+};
+
 extern inline __attribute__ (( always_inline )) HelError helYield() {
 	return helSyscall0(kHelCallYield);
 };

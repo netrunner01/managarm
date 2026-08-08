@@ -1952,6 +1952,30 @@ HelError helQueryKernelInfo(HelKernelInfo *user_info) {
 	return kHelErrNone;
 }
 
+HelError helQuerySpaceStats(HelHandle handle, HelSpaceStats *user_stats) {
+	auto this_thread = getCurrentThread();
+	auto this_universe = this_thread->getUniverse();
+
+	smarter::shared_ptr<AddressSpace, BindableHandle> space;
+	if(handle == kHelNullHandle) {
+		space = this_thread->getAddressSpace().lock();
+	}else{
+		auto spaceOutcome = this_universe->resolveObject<DescriptorType::addressSpace>(handle, kHelRightNull);
+		if(!spaceOutcome)
+			return translateError(spaceOutcome.error());
+		space = std::move(*spaceOutcome);
+	}
+
+	HelSpaceStats stats;
+	memset(&stats, 0, sizeof(HelSpaceStats));
+	stats.rss = space->rss();
+
+	if(!writeUserObject(user_stats, stats))
+		return kHelErrFault;
+
+	return kHelErrNone;
+}
+
 HelError helSetPriority(HelHandle handle, int priority) {
 	auto this_thread = getCurrentThread();
 	auto this_universe = this_thread->getUniverse();

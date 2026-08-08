@@ -742,6 +742,9 @@ void handleSyscall(SyscallImageAccessor image) {
 	case kHelCallQueryKernelInfo: {
 		*image.error() = helQueryKernelInfo((HelKernelInfo *)arg0);
 	} break;
+	case kHelCallQuerySpaceStats: {
+		*image.error() = helQuerySpaceStats((HelHandle)arg0, (HelSpaceStats *)arg1);
+	} break;
 	case kHelCallSetPriority: {
 		*image.error() = helSetPriority((HelHandle)arg0, (int)arg1);
 	} break;

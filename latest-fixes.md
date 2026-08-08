@@ -38,5 +38,3 @@ Go-forward `port/keeper-rederive` (managarm/mlibc) + `port/coherence-pins` (boot
 - posix `0b1b0101d` + thor `6bc8239e4` — real busy/idle CPU time in `/proc/stat`
 - gfx/bochs `6a840823f` — 1280x1024 mode
 
-**Tooling**
-- analysis `e41a838` — iron-clad per-cycle boot/log UUID freshness scheme (`boot-fresh.sh` gate)

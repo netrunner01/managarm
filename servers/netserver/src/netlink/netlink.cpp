@@ -332,6 +332,11 @@ helix_ng::CredentialsView, int layer, int number, std::vector<char> &optbuf) {
 		auto type_ = SOCK_DGRAM;
 		optbuf.resize(std::min(optbuf.size(), sizeof(type_)));
 		memcpy(optbuf.data(), &type_, optbuf.size());
+	} else if(layer == SOL_SOCKET && number == SO_ERROR) {
+		// No asynchronous error state is tracked here; report success.
+		int err = 0;
+		optbuf.resize(std::min(optbuf.size(), sizeof(err)));
+		memcpy(optbuf.data(), &err, optbuf.size());
 	} else {
 		std::cout << std::format("netserver: unhandled netlink socket getsockopt layer {} number {}\n",
 				layer, number);

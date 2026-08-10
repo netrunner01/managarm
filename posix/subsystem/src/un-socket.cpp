@@ -805,6 +805,10 @@ public:
 			}
 
 			memcpy(optbuf.data(), &result, std::min(optbuf.size(), sizeof(result)));
+		} else if(layer == SOL_SOCKET && number == SO_ERROR) {
+			// No asynchronous error state is tracked here; report success.
+			int err = 0;
+			memcpy(optbuf.data(), &err, std::min(optbuf.size(), sizeof(err)));
 		} else {
 			printf("posix un-socket: unhandled getsockopt layer %d number %d\n", layer, number);
 			co_return protocols::fs::Error::invalidProtocolOption;

@@ -5,6 +5,7 @@
 #include <arch/bit.hpp>
 #include <arch/variable.hpp>
 #include <protocols/fs/server.hpp>
+#include <cerrno>
 #include <cstring>
 #include <format>
 #include <iomanip>
@@ -112,6 +113,7 @@ static std::mt19937 globalPrng;
 struct TcpHeader {
 	static constexpr arch::field<uint16_t, bool> finFlag{0, 1};
 	static constexpr arch::field<uint16_t, bool> synFlag{1, 1};
+	static constexpr arch::field<uint16_t, bool> rstFlag{2, 1};
 	static constexpr arch::field<uint16_t, bool> ackFlag{4, 1};
 	static constexpr arch::field<uint16_t, unsigned int> headerWords{12, 4};
 
@@ -376,9 +378,15 @@ struct Tcp4Socket {
 		self->flushEvent_.raise();
 
 		while(true) {
-			if(self->connectState_ != ConnectState::sendSyn)
+			if(self->connectState_ != ConnectState::sendSyn || self->aborted_)
 				break;
 			co_await self->settleEvent_.async_wait();
+		}
+		if(self->aborted_) {
+			// The peer refused the connection (RST). A blocking connect()
+			// reports the error and clears the pending SO_ERROR.
+			self->pendingError_ = 0;
+			co_return protocols::fs::Error::connectionRefused;
 		}
 		co_return protocols::fs::Error::none;
 	}
@@ -531,6 +539,8 @@ struct Tcp4Socket {
 				edges |= EPOLLOUT;
 			if(self->hupSeq_ > pastSeq)
 				edges |= EPOLLHUP;
+			if(self->errSeq_ > pastSeq)
+				edges |= EPOLLERR;
 
 			if (edges & mask)
 				break;
@@ -553,6 +563,8 @@ struct Tcp4Socket {
 			active |= EPOLLOUT;
 		if(self->remoteClosed_)
 			active |= EPOLLHUP;
+		if(self->pendingError_)
+			active |= EPOLLERR;
 
 		co_return protocols::fs::PollStatusResult{self->currentSeq_, active};
 	}
@@ -612,6 +624,12 @@ struct Tcp4Socket {
 			auto type_ = SOCK_STREAM;
 			optbuf.resize(std::min(optbuf.size(), sizeof(type_)));
 			memcpy(optbuf.data(), &type_, optbuf.size());
+		} else if(layer == SOL_SOCKET && number == SO_ERROR) {
+			// Return and clear the pending asynchronous error (e.g. a RST).
+			int err = self->pendingError_;
+			self->pendingError_ = 0;
+			optbuf.resize(std::min(optbuf.size(), sizeof(err)));
+			memcpy(optbuf.data(), &err, optbuf.size());
 		} else if(layer == SOL_SOCKET && number == SO_BINDTODEVICE) {
 			size_t size = self->boundInterface_ ? self->boundInterface_->name().size() : 0;
 			optbuf.resize(size);
@@ -699,6 +717,12 @@ private:
 	bool localClosed_ = false;
 	bool listening_ = false;
 
+	// Set when the peer resets the connection (RST). pendingError_ holds the
+	// errno reported through getsockopt(SO_ERROR) (read-and-clear); aborted_
+	// unblocks connect() and stops the flush loop.
+	bool aborted_ = false;
+	int pendingError_ = 0;
+
 	// Out-SN corresponding to the front of sendRing_.
 	uint32_t localSettledSn_ = 0;
 	// Out-SN that has already been flushed to the IP layer (>= localSettledSn_).
@@ -726,6 +750,7 @@ private:
 	uint64_t outSeq_ = 0;
 	uint64_t hupSeq_ = 1;
 	uint64_t listenSeq_ = 1;
+	uint64_t errSeq_ = 0;
 	async::recurring_event pollEvent_;
 
 	std::shared_ptr<nic::Link> boundInterface_ = {};
@@ -733,6 +758,9 @@ private:
 
 async::result<void> Tcp4Socket::flushOutPackets_() {
 	while(true) {
+		if(aborted_)
+			co_return;
+
 		if(connectState_ == ConnectState::none) {
 			co_await flushEvent_.async_wait();
 			continue;
@@ -1017,6 +1045,42 @@ void Tcp4Socket::handleInPacket_(TcpPacket packet) {
 					<< std::endl;
 		}
 
+		return;
+	}
+
+	// A RST from the peer aborts the connection: report it through
+	// getsockopt(SO_ERROR) and unblock any in-flight connect().
+	if(packet.header.flags.load() & TcpHeader::rstFlag) {
+		if(connectState_ == ConnectState::sendSyn) {
+			// RST-ACK refusing our SYN: connection refused.
+			if(localSettledSn_ == localFlushedSn_
+					|| !(packet.header.flags.load() & TcpHeader::ackFlag)
+					|| packet.header.ackNumber.load() != localSettledSn_ + 1) {
+				std::cout << "netserver: Rejecting RST with bad ack-number [sendSyn]"
+						<< std::endl;
+				return;
+			}
+			pendingError_ = ECONNREFUSED;
+		}else if(connectState_ == ConnectState::connected
+				|| connectState_ == ConnectState::sendFin
+				|| connectState_ == ConnectState::finAcked) {
+			// In-window RST on an established connection: connection reset.
+			if(packet.header.seqNumber.load() != remoteKnownSn_) {
+				std::cout << "netserver: Rejecting out-of-window RST" << std::endl;
+				return;
+			}
+			pendingError_ = ECONNRESET;
+		}else{
+			return;
+		}
+
+		aborted_ = true;
+		remoteClosed_ = true;
+		errSeq_ = ++currentSeq_;
+		hupSeq_ = currentSeq_;
+		inEvent_.raise();
+		settleEvent_.raise();
+		pollEvent_.raise();
 		return;
 	}
 

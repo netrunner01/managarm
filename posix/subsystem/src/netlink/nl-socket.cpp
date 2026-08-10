@@ -373,6 +373,11 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::getSocketOption(Pro
 	} else if(layer == SOL_SOCKET && number == SO_TYPE) {
 		optbuf.resize(std::min(optbuf.size(), sizeof(type_)));
 		memcpy(optbuf.data(), &type_, optbuf.size());
+	} else if(layer == SOL_SOCKET && number == SO_ERROR) {
+		// No asynchronous error state is tracked here; report success.
+		int err = 0;
+		optbuf.resize(std::min(optbuf.size(), sizeof(err)));
+		memcpy(optbuf.data(), &err, optbuf.size());
 	} else {
 		printf("posix nl-socket: unhandled getsockopt layer %d number %d\n", layer, number);
 		co_return protocols::fs::Error::invalidProtocolOption;

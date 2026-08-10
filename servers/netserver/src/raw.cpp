@@ -183,6 +183,23 @@ async::result<frg::expected<protocols::fs::Error>> RawSocket::setSocketOption(vo
 	co_return {};
 }
 
+async::result<frg::expected<protocols::fs::Error>> RawSocket::getSocketOption(void *obj,
+		helix_ng::CredentialsView, int layer, int number, std::vector<char> &optbuf) {
+	(void)obj;
+
+	if(layer == SOL_SOCKET && number == SO_ERROR) {
+		// No asynchronous error state is tracked here; report success.
+		int err = 0;
+		optbuf.resize(std::min(optbuf.size(), sizeof(err)));
+		memcpy(optbuf.data(), &err, optbuf.size());
+	} else {
+		printf("netserver: unhandled getsockopt layer %d number %d\n", layer, number);
+		co_return protocols::fs::Error::invalidProtocolOption;
+	}
+
+	co_return {};
+}
+
 async::result<frg::expected<protocols::fs::Error, protocols::fs::PollWaitResult>> RawSocket::pollWait(
 		void *obj, uint64_t past_seq, int mask, async::cancellation_token cancellation) {
 	auto self = static_cast<RawSocket *>(obj);

@@ -571,6 +571,11 @@ struct Udp4Socket {
 			auto type_ = SOCK_DGRAM;
 			optbuf.resize(std::min(optbuf.size(), sizeof(type_)));
 			memcpy(optbuf.data(), &type_, optbuf.size());
+		} else if(layer == SOL_SOCKET && number == SO_ERROR) {
+			// No asynchronous error state is tracked here; report success.
+			int err = 0;
+			optbuf.resize(std::min(optbuf.size(), sizeof(err)));
+			memcpy(optbuf.data(), &err, optbuf.size());
 		} else if(layer == SOL_SOCKET && number == SO_BINDTODEVICE) {
 			size_t size = self->boundInterface_ ? self->boundInterface_->name().size() : 0;
 			optbuf.resize(size);

@@ -96,7 +96,7 @@ OpenFile::readSome(Process *, void *data, size_t max_length, async::cancellation
 	auto packet = &_recvQueue.front();
 	// Truncate to the caller's buffer (netlink datagrams are discarded on short read).
 	// max_length is user-controlled, so the old assert(max_length >= size) was a
-	// client-triggerable overflow of the caller's buffer; clamp instead. DEF-31 / WI-06.
+	// client-triggerable overflow of the caller's buffer; clamp instead. DEF-31.
 	auto size = packet->buffer.size();
 	auto chunk = std::min(size, max_length);
 	memcpy(data, packet->buffer.data(), chunk);
@@ -211,7 +211,7 @@ OpenFile::sendMsg(Process *process, uint32_t flags, const void *data, size_t max
 	if(logSockets)
 		std::cout << "posix: Send to socket \e[1;34m" << structName() << "\e[0m" << std::endl;
 	// flags and any passed fds are user-controlled; netlink ignores both (like Linux)
-	// rather than crash the shared server. DEF-31 / WI-06.
+	// rather than crash the shared server. DEF-31.
 	if(flags)
 		std::cout << "posix: ignoring unimplemented netlink sendMsg flags 0x"
 				<< std::hex << flags << std::dec << std::endl;
@@ -232,7 +232,7 @@ OpenFile::sendMsg(Process *process, uint32_t flags, const void *data, size_t max
 	}
 
 	// Auto-bind an ephemeral port if the client sends before an explicit bind()
-	// (Linux auto-binds here) rather than asserting. DEF-31 / WI-06.
+	// (Linux auto-binds here) rather than asserting. DEF-31.
 	if(!_socketPort)
 		_associatePort();
 
@@ -332,7 +332,7 @@ async::result<protocols::fs::Error> OpenFile::bind(Process *,
 
 async::result<size_t> OpenFile::sockname(void *addr_ptr, size_t max_addr_length) {
 	// getsockname() before an explicit bind() auto-binds an ephemeral port (Linux
-	// behaviour) rather than asserting. DEF-31 / WI-06.
+	// behaviour) rather than asserting. DEF-31.
 	if(!_socketPort)
 		_associatePort();
 
@@ -350,7 +350,7 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::setSocketOption(int
 		std::vector<char> optbuf) {
 	if(layer == SOL_SOCKET && number == SO_ATTACH_FILTER) {
 		// optbuf comes from setsockopt(optlen); reject a non-multiple length gracefully
-		// (like the !bpf.validate() path below) rather than asserting. DEF-31 / WI-06.
+		// (like the !bpf.validate() path below) rather than asserting. DEF-31.
 		if(optbuf.size() % sizeof(struct sock_filter) != 0)
 			co_return protocols::fs::Error::illegalArguments;
 
@@ -367,7 +367,7 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::setSocketOption(int
 			co_return protocols::fs::Error::illegalArguments;
 		auto it = globalGroupMap.find({_protocol, val});
 		// val is the user's setsockopt group id (groups are stored 1..N, so 0 and any
-		// unconfigured group miss); reject rather than asserting. DEF-31 / WI-06.
+		// unconfigured group miss); reject rather than asserting. DEF-31.
 		if(it == globalGroupMap.end())
 			co_return protocols::fs::Error::illegalArguments;
 		auto group = it->second.get();
@@ -378,7 +378,7 @@ async::result<frg::expected<protocols::fs::Error>> OpenFile::setSocketOption(int
 		pktinfo_ = (val != 0);
 	} else if(layer == SOL_NETLINK && number == NETLINK_DROP_MEMBERSHIP) {
 		// Mirror of NETLINK_ADD_MEMBERSHIP above: sd-netlink drops multicast groups it
-		// joined. Reject bad lengths/ids gracefully rather than asserting (DEF-31 / WI-06).
+		// joined. Reject bad lengths/ids gracefully rather than asserting (DEF-31).
 		// (DEF-79)
 		if(optbuf.size() < sizeof(int))
 			co_return protocols::fs::Error::illegalArguments;

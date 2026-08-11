@@ -250,7 +250,7 @@ public:
 			// SOCK_DGRAM: a short read truncates and discards the rest of the datagram
 			// (Linux semantics). max_length is user-controlled, so the old
 			// assert(max_length >= size) was a client-triggerable overflow of the caller's
-			// buffer; clamp instead. DEF-31 / WI-06.
+			// buffer; clamp instead. DEF-31.
 			auto size = packet->buffer.size();
 			auto chunk = std::min(size, max_length);
 			memcpy(data, packet->buffer.data(), chunk);
@@ -402,7 +402,7 @@ public:
 			std::vector<smarter::shared_ptr<File, FileHandle>> files, struct ucred) override {
 		OpenFile *remote = nullptr;
 		// Warn on unimplemented flags rather than asserting, matching recvMsg above and
-		// avoiding a client-triggerable crash of the shared server. DEF-31 / WI-06.
+		// avoiding a client-triggerable crash of the shared server. DEF-31.
 		if(flags & ~(MSG_DONTWAIT | MSG_NOSIGNAL))
 			std::cout << "posix: Unimplemented flag in un-socket sendMsg " << std::hex
 					<< flags << std::dec << " for pid: " << process->pid() << std::endl;
@@ -439,7 +439,7 @@ public:
 				// addr_length is the client's msg_namelen; reject an oversized address
 				// instead of overflowing the stack sockaddr_un. posix serves every process
 				// and is never restarted, so the old assert was a client-triggerable crash
-				// (a stack buffer overflow with asserts compiled out). DEF-31 / WI-06.
+				// (a stack buffer overflow with asserts compiled out). DEF-31.
 				if(addr_length > sizeof(struct sockaddr_un))
 					co_return protocols::fs::Error::illegalArguments;
 				memcpy(&sa, addr_ptr, addr_length);
@@ -605,7 +605,7 @@ public:
 		struct sockaddr_un sa;
 		// addr_length is the client's addrlen; reject an oversized address instead of
 		// overflowing the stack sockaddr_un (client-triggerable crash / stack overflow
-		// with asserts compiled out). DEF-31 / WI-06.
+		// with asserts compiled out). DEF-31.
 		if(addr_length > sizeof(struct sockaddr_un))
 			co_return protocols::fs::Error::illegalArguments;
 		memcpy(&sa, addr_ptr, addr_length);

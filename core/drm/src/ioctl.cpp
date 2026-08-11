@@ -1077,8 +1077,12 @@ struct drm_core::File::HandleIoctl {
 			std::vector<char> blob_data;
 			blob_data.resize(req.drm_blob_size());
 
+			// Receive exactly as many bytes as the blob was allocated for
+			// (req.drm_blob_size()); the hardcoded sizeof(drm_mode_modeinfo)
+			// overflowed the heap buffer for smaller blobs and truncated larger
+			// ones.
 			auto [recv_buffer] = co_await helix_ng::exchangeMsgs(conversation,
-				helix_ng::recvBuffer(blob_data.data(), sizeof(drm_mode_modeinfo))
+				helix_ng::recvBuffer(blob_data.data(), req.drm_blob_size())
 			);
 			HEL_CHECK(recv_buffer.error());
 

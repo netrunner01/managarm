@@ -109,8 +109,14 @@ bool Ip4Packet::parse(arch::dma_buffer owner, arch::dma_buffer_view frame, bool 
 
 	// if this is a normal non-fragmented packet (fragmented packets may exceed header.length)
 	// ensure we only access the correct parts of the buffer.
-	if (resizeData)
+	if (resizeData) {
+		// header.length is attacker-controlled; a value exceeding the received
+		// frame would trip the subview() bounds assert (a remote abort). Drop
+		// such packets instead.
+		if (header.length > data.size())
+			return false;
 		data = data.subview(0, header.length);
+	}
 
 	if (data.size() < header.ihl * 4) {
 		return false;

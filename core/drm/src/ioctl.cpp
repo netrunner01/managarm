@@ -1141,9 +1141,20 @@ struct drm_core::File::HandleIoctl {
 				goto send;
 			}
 
+			// The object-id and prop-count arrays are client-supplied and are
+			// indexed in lockstep below; a mismatch would read drm_prop_counts()
+			// out of bounds.
+			if(req.drm_prop_counts_size() != req.drm_obj_ids_size()) {
+				resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+				goto send;
+			}
+
 			for(size_t i = 0; i < req.drm_obj_ids_size(); i++) {
 				auto mode_obj = self->_device->findObject(req.drm_obj_ids(i));
-				assert(mode_obj);
+				if(!mode_obj) {
+					resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+					goto send;
+				}
 
 				if (logDrmRequests) {
 					switch(mode_obj->type()) {
@@ -1178,8 +1189,19 @@ struct drm_core::File::HandleIoctl {
 				}
 
 				for(size_t j = 0; j < req.drm_prop_counts(i); j++) {
+					// prop ids and values are a flat client-supplied array indexed
+					// by the running prop_count; bound it before the unchecked
+					// operator[] access.
+					if(prop_count + j >= req.drm_props_size()
+							|| prop_count + j >= req.drm_prop_values_size()) {
+						resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+						goto send;
+					}
 					auto prop = self->_device->getProperty(req.drm_props(prop_count + j));
-					assert(prop);
+					if(!prop) {
+						resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+						goto send;
+					}
 					auto value = req.drm_prop_values(prop_count + j);
 
 					auto prop_type = prop->propertyType();
@@ -1212,7 +1234,10 @@ struct drm_core::File::HandleIoctl {
 
 			{
 				auto valid = config->capture(assignments, state);
-				assert(valid);
+				if(!valid) {
+					resp.set_error(managarm::fs::Errors::ILLEGAL_ARGUMENT);
+					goto send;
+				}
 			}
 
 			if(!(req.drm_flags() & DRM_MODE_ATOMIC_TEST_ONLY)) {

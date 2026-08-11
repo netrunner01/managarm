@@ -317,7 +317,7 @@ async::detached bind(mbus_ng::Entity entity, mbus_ng::Properties properties) {
 		drvcore::registerMbusDevice(entity.id(), device);
 	} else {
 		// Unsupported PCI device type: skip it rather than crash the shared posix
-		// server (hardware/enumeration input; DEF-31 / WI-06).
+		// server (hardware/enumeration input; DEF-31).
 		std::cout << "posix: unsupported PCI dev type '" << type << "'; skipping" << std::endl;
 	}
 }

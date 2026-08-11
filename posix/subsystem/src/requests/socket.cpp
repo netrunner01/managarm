@@ -132,7 +132,7 @@ HandleRequest::operator()(managarm::posix::SocketRequest &&req,
 		file = std::move(un.value());
 	}else if(req.domain() == AF_NETLINK) {
 		// socktype is user-controlled; reject an unsupported one gracefully like the
-		// AF_UNIX branch above, rather than asserting (DEF-31 / WI-06).
+		// AF_UNIX branch above, rather than asserting (DEF-31).
 		if(req.socktype() != SOCK_RAW && req.socktype() != SOCK_DGRAM) {
 			co_await sendErrorResponse<managarm::posix::SocketResponse>(conversation, managarm::posix::Errors::UNSUPPORTED_SOCKET_TYPE);
 			co_return {};
@@ -194,7 +194,7 @@ HandleRequest::operator()(managarm::posix::SockpairRequest &&req,
 	logRequest(logRequests, self, "SOCKPAIR");
 
 	// flags is user-controlled; reject unknown bits gracefully like SocketRequest above
-	// rather than asserting (DEF-31 / WI-06).
+	// rather than asserting (DEF-31).
 	if(req.flags() & ~(SOCK_NONBLOCK | SOCK_CLOEXEC)) {
 		co_await sendErrorResponse<managarm::posix::SockpairResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
 		co_return {};

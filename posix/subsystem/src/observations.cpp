@@ -461,7 +461,7 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			// range it would index the 64-entry SignalQueue slot array out of bounds
 			// (SignalQueue::issueSignal asserts sn>0 && sn-1<64), so reject it here like
 			// Linux (EINVAL) before dispatch. sn==0 stays valid -- it is the permission/
-			// existence probe, and the `if(sn)` dispatch below skips it. DEF-31 / WI-06.
+			// existence probe, and the `if(sn)` dispatch below skips it. DEF-31.
 			if(sn < 0 || sn > 64) {
 				gprs[kHelRegOut0] = EINVAL;
 				HEL_CHECK(helStoreRegisters(thread.getHandle(), kHelRegsGeneral, &gprs));

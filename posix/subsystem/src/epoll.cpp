@@ -234,7 +234,7 @@ public:
 		// A zero-size event buffer (epoll_wait maxevents=0) has nothing to report:
 		// return no events rather than asserting/indexing out of bounds. The handler
 		// then sends an empty result buffer, which the client's recvBuffer matches, so
-		// there is neither a crash nor a hung exchange. DEF-31 / WI-06.
+		// there is neither a crash nor a hung exchange. DEF-31.
 		if(!max_events)
 			co_return 0;
 		if(logEpoll)
@@ -483,7 +483,7 @@ Error modifyItem(File *epfile, File *file, int fd, int flags, uint64_t cookie) {
 
 Error deleteItem(File *epfile, File *file, int fd, int flags) {
 	// EPOLL_CTL_DEL ignores the event mask; don't assert on a stray flags value from a
-	// client (DEF-31 / WI-06).
+	// client (DEF-31).
 	(void)flags;
 	auto epoll = static_cast<OpenFile *>(epfile);
 	return epoll->deleteItem(file, fd);

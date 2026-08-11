@@ -737,7 +737,7 @@ private:
 		// Until then, fail gracefully like the FsNode base default rather than asserting:
 		// the mknod handler maps illegalOperationTarget -> EINVAL. posix-subsystem serves
 		// every process and is never restarted, so a reachable assert here would freeze
-		// the whole machine (DEF-31 / WI-06).
+		// the whole machine (DEF-31).
 		std::cout << "posix: mkdev() is not implemented for extern_fs" << std::endl;
 		co_return Error::illegalOperationTarget;
 	}

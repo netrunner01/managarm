@@ -359,7 +359,7 @@ getLinkOrCreate(std::shared_ptr<void> object, std::string name, mode_t mode, boo
 	co_return protocols::fs::GetLinkResult{inode, inode->number, protocols::fs::FileType::regular};
 }
 
-// fsync/fdatasync: make the file's writes durable. Order matters (see WI-13): flush the
+// fsync/fdatasync: make the file's writes durable. Order matters (see DEF-03): flush the
 // file's dirty DATA pages out of the managed page cache to the device, then (for fsync,
 // not fdatasync) the inode METADATA -- the size/block-map must be durable or the data
 // blocks are unreachable after a crash -- then issue a device cache FLUSH so the disk

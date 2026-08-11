@@ -220,7 +220,7 @@ struct FileOperations {
 	async::result<Error> (*shutdown)(void *object, int how);
 	// Appended at the END of the struct on purpose: FileOperations is shared across
 	// libfs_protocol.so users; adding a member here keeps every existing member's offset
-	// stable, so a not-yet-rebuilt consumer stays ABI-compatible. (WI-13)
+	// stable, so a not-yet-rebuilt consumer stays ABI-compatible. (DEF-03)
 	async::result<frg::expected<protocols::fs::Error>> (*fsync)(void *object, bool dataOnly) = nullptr;
 
 	bool logRequests = false;

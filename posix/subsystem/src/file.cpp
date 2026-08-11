@@ -97,7 +97,7 @@ async::result<frg::expected<protocols::fs::Error, size_t>> File::ptPwrite(void *
 	}
 	auto result = co_await self->pwrite(maybeProcess->get(), offset, buffer, length);
 	// posix-subsystem serves every process and is never restarted, so a reachable assert
-	// here (any pwrite error other than noSpaceLeft) would freeze the machine (DEF-31/WI-06).
+	// here (any pwrite error other than noSpaceLeft) would freeze the machine (DEF-31).
 	// Map every error through the standard converter, mirroring ptWrite() above.
 	if(!result)
 		co_return result.error() | protocols::fs::toFsProtoError;

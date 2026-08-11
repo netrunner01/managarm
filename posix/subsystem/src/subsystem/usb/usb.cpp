@@ -118,7 +118,7 @@ void bindController(mbus_ng::Entity entity, mbus_ng::Properties properties, uint
 					break;
 				default:
 					// Unhandled controller version: skip this root hub rather than crash the
-					// shared posix server (hardware-input; DEF-31 / WI-06).
+					// shared posix server (hardware-input; DEF-31).
 					std::cerr << "posix: unhandled USB 1 minor revision " << minor
 							<< "; skipping root hub for " << sysfs_name << std::endl;
 					return;
@@ -150,7 +150,7 @@ void bindController(mbus_ng::Entity entity, mbus_ng::Properties properties, uint
 					break;
 				default:
 					// Unhandled controller version: skip this root hub rather than crash the
-					// shared posix server (hardware-input; DEF-31 / WI-06).
+					// shared posix server (hardware-input; DEF-31).
 					std::cerr << "posix: unhandled USB 3 minor revision " << minor
 							<< "; skipping root hub for " << sysfs_name << std::endl;
 					return;
@@ -374,7 +374,7 @@ std::shared_ptr<drvcore::BusDriver> getInterfaceDriver(std::string name) {
 	} else {
 		// No driver for this interface class: leave the interface unbound rather than
 		// crash the shared posix server. The name comes from a USB driver's mbus
-		// property, not raw hardware (DEF-31 / WI-06); the caller skips a null driver.
+		// property, not raw hardware (DEF-31); the caller skips a null driver.
 		std::cerr << "posix: no driver for USB interface '" << name
 				<< "'; leaving it unbound" << std::endl;
 		return nullptr;

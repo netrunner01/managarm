@@ -94,7 +94,7 @@ async::result<frg::expected<Error, off_t>> AttributeFile::seek(off_t offset, Vfs
 		// have not already (same lazy load as pread) so we know its size.
 		// (Previously asserted -- but posix serves every process and is never restarted,
 		// so lseek(fd, x, SEEK_END) on a sysfs attribute would freeze the machine.
-		// DEF-31 / WI-06.)
+		// DEF-31.)
 		if(!_cached) {
 			auto node = static_cast<AttributeNode *>(associatedLink()->getTarget().get());
 			// TODO(geert): Don't assume this doesn't block.

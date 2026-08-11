@@ -365,7 +365,7 @@ HandleRequest::operator()(managarm::posix::PidfdSendSignalRequest &&req,
 
 	// req.signal() is the user's signal number; out of range it would index the
 	// SignalQueue slots out of bounds (SignalQueue::issueSignal asserts sn-1<64). Reject
-	// like Linux (EINVAL); signal 0 stays a valid no-op permission probe. DEF-31 / WI-06.
+	// like Linux (EINVAL); signal 0 stays a valid no-op permission probe. DEF-31.
 	if(req.signal() < 0 || req.signal() > 64) {
 		co_await sendErrorResponse<managarm::posix::PidfdSendSignalResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
 		co_return {};
@@ -433,7 +433,7 @@ HandleRequest::operator()(managarm::posix::EpollCreateRequest &&req,
 	logRequest(logRequests, self, "EPOLL_CREATE");
 
 	// flags is user-controlled; reject unknown bits gracefully like timerfd_create above
-	// rather than asserting (DEF-31 / WI-06).
+	// rather than asserting (DEF-31).
 	if(req.flags() & ~(managarm::posix::OpenFlags::OF_CLOEXEC)) {
 		co_await sendErrorResponse<managarm::posix::EpollCreateResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
 		co_return {};
@@ -468,7 +468,7 @@ HandleRequest::operator()(managarm::posix::PipeCreateRequest &&req,
 	logRequest(logRequests, self, "PIPE_CREATE");
 
 	// flags is user-controlled; reject unknown bits gracefully rather than asserting
-	// (DEF-31 / WI-06).
+	// (DEF-31).
 	if(req.flags() & ~(O_CLOEXEC | O_NONBLOCK)) {
 		co_await sendErrorResponse<managarm::posix::PipeCreateResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
 		co_return {};

@@ -82,7 +82,7 @@ HandleRequest::operator()(managarm::posix::VmMapRequest &&req,
 	}else{
 		auto file = self->fileContext()->getFile(req.fd());
 		// req.fd() is user-controlled; a file mmap of a closed fd must fail with EBADF,
-		// not crash the server (DEF-31 / WI-06).
+		// not crash the server (DEF-31).
 		if(!file) {
 			co_await sendErrorResponse<managarm::posix::VmMapResponse>(conversation, managarm::posix::Errors::BAD_FD);
 			co_return {};

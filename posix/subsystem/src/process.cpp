@@ -787,7 +787,7 @@ SignalContext::SignalHandling SignalContext::determineHandling(SignalItem *item,
 	// Handle default dispositions properly
 	if(handler.disposition == SignalDisposition::none) {
 		switch (item->signalNumber) {
-			// TODO(WI-14): Implement proper job-control stop/continue semantics.
+			// TODO(DEF-18): Implement proper job-control stop/continue semantics.
 			// Their default disposition is stop/continue (never terminate), so until
 			// that machinery exists we must at least not kill the target -- a routine
 			// SIGCONT during service teardown was terminating processes (DEF-78/DEF-16).

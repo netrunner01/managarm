@@ -740,10 +740,24 @@ async::result<void> observeThread(std::shared_ptr<Process> self,
 			printf("\e[39m");
 			fflush(stdout);
 
-			if(debugFaults) {
-				launchGdbServer(self.get());
-				co_await async::suspend_indefinitely(async::cancellation_token{});
-			}
+			// A userspace int3 must be delivered as SIGTRAP (default action:
+			// terminate), exactly like the faults below. Previously this branch
+			// neither raised a signal, terminated, nor resumed, so the trapping
+			// thread was parked forever and the whole process hung instead of
+			// crashing (DEF-108) -- e.g. GLib's _g_log_abort()/G_BREAKPOINT() on a
+			// fatal assertion. SIGTRAP has no handler by default, so raiseContext
+			// takes its terminate path (no gdb stall); a debugger that installs a
+			// SIGTRAP handler is still resumed via resumeObserved().
+			auto item = new SignalItem;
+			item->signalNumber = SIGTRAP;
+			if(!self->checkSignalRaise())
+				std::cout << "\e[33m" "posix: Ignoring global signal flag "
+						"during synchronous SIGTRAP" "\e[39m" << std::endl;
+			bool killed;
+			co_await self->threadGroup()->signalContext()->determineAndRaiseContext(item, self.get(), killed);
+			if(killed)
+				break;
+			resumeObserved();
 		}else if(observe.observation() == kHelObservePageFault) {
 			if(logPageFaults) {
 				printf("\e[31mposix: Page fault in process %s\n", self->path().c_str());

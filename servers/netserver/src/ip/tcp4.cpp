@@ -383,10 +383,16 @@ struct Tcp4Socket {
 			co_await self->settleEvent_.async_wait();
 		}
 		if(self->aborted_) {
-			// The peer refused the connection (RST). A blocking connect()
-			// reports the error and clears the pending SO_ERROR.
+			// The connection was aborted before it established: a peer RST
+			// (refused) or a routing/transmit failure (unreachable). Report the
+			// matching error; a blocking connect() consumes the pending SO_ERROR.
+			int err = self->pendingError_;
 			self->pendingError_ = 0;
-			co_return protocols::fs::Error::connectionRefused;
+			switch(err) {
+				case ENETUNREACH: co_return protocols::fs::Error::netUnreachable;
+				case EHOSTUNREACH: co_return protocols::fs::Error::hostUnreachable;
+				default: co_return protocols::fs::Error::connectionRefused;
+			}
 		}
 		co_return protocols::fs::Error::none;
 	}
@@ -780,8 +786,17 @@ async::result<void> Tcp4Socket::flushOutPackets_() {
 			// Construct and transmit the initial SYN packet.
 			auto targetInfo = co_await ip4().targetByRemote(remoteEp_.ipAddress, boundInterface_);
 			if (!targetInfo) {
-				// TODO: Return an error to users.
+				// No route to the destination: abort the pending connect() with
+				// ENETUNREACH instead of hanging forever (mirror the RST path).
 				std::cout << "netserver: Destination unreachable" << std::endl;
+				pendingError_ = ENETUNREACH;
+				aborted_ = true;
+				remoteClosed_ = true;
+				errSeq_ = ++currentSeq_;
+				hupSeq_ = currentSeq_;
+				inEvent_.raise();
+				settleEvent_.raise();
+				pollEvent_.raise();
 				co_return;
 			}
 
@@ -819,8 +834,17 @@ async::result<void> Tcp4Socket::flushOutPackets_() {
 			auto error = co_await ip4().sendFrame(std::move(*targetInfo),
 				buf.data(), buf.size(), static_cast<uint16_t>(IpProto::tcp));
 			if (error != protocols::fs::Error::none) {
-				// TODO: Return an error to users.
+				// Could not transmit the SYN: abort the pending connect() with
+				// EHOSTUNREACH instead of hanging forever (mirror the RST path).
 				std::cout << "netserver: Could not send TCP packet" << std::endl;
+				pendingError_ = EHOSTUNREACH;
+				aborted_ = true;
+				remoteClosed_ = true;
+				errSeq_ = ++currentSeq_;
+				hupSeq_ = currentSeq_;
+				inEvent_.raise();
+				settleEvent_.raise();
+				pollEvent_.raise();
 				co_return;
 			}
 		}else if(connectState_ == ConnectState::sendSynAck) {

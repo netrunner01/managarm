@@ -775,7 +775,14 @@ async::result<std::expected<std::string, Error>> MapNode::show(Process *) {
 		co_return std::unexpected(Error::noSuchProcess);
 
 	auto vmContext = p->vmContext();
+	auto fsContext = p->fsContext();
 	std::stringstream stream;
+	// A process mid-teardown has a null Vm/FsContext (mirrors the guards in
+	// StatNode/StatmNode::show); return empty maps rather than dereferencing
+	// them, which would fault and abort posix-subsystem. Capturing fsContext
+	// here also pins it across the getStats() co_await in the loop below.
+	if(!vmContext || !fsContext)
+		co_return stream.str();
 	for (auto area : *vmContext) {
 		stream << std::hex << area.baseAddress();
 		stream << "-";
@@ -802,7 +809,7 @@ async::result<std::expected<std::string, Error>> MapNode::show(Process *) {
 			stream << " ";
 			stream << std::setw(0) << fileStats.value().inodeNumber;
 			stream << "    ";
-			stream << viewPath.getPath(p->fsContext()->getRoot());
+			stream << viewPath.getPath(fsContext->getRoot());
 		} else {
 			// TODO: In the case of memfd files, show the name here.
 			stream << "00000000 00:00 0";

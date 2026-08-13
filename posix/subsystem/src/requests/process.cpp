@@ -575,8 +575,15 @@ HandleRequest::operator()(managarm::posix::GetResourceUsageRequest &&req,
 		user_time = RLIM_INFINITY;
 	}else{
 		std::println("\e[31mposix: GET_RESOURCE_USAGE mode is not supported, requested mode: {}\e[39m", mode);
-		user_time = 0;
-		// TODO: Return an error response.
+		// An unsupported `who` is EINVAL per POSIX; do not fabricate a SUCCESS with zero usage.
+		managarm::posix::GetResourceUsageResponse resp;
+		resp.set_error(managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
+			helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
+		);
+		HEL_CHECK(send_resp.error());
+		logBragiReply(resp);
+		co_return {};
 	}
 
 	managarm::posix::GetResourceUsageResponse resp;

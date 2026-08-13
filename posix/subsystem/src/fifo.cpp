@@ -343,6 +343,11 @@ openNamedChannel(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link,
 
 		co_return File::constructHandle(std::move(r_file));
 	} else if (flags & semanticWrite) {
+		// man 7 fifo: opening write-only, non-blocking, with no reader present must fail with
+		// ENXIO. Check before connecting so we neither register a writer nor leak writerCount.
+		if (nonBlock && !channel->readerCount)
+			co_return Error::noBackingDevice;
+
 		auto w_file = smarter::make_shared<OpenFile>(mount, link, false, true, nonBlock);
 		w_file->setupWeakFile(w_file);
 		w_file->connectChannel(channel);
@@ -350,8 +355,6 @@ openNamedChannel(std::shared_ptr<MountView> mount, std::shared_ptr<FsLink> link,
 		channel->writerPresent.raise();
 		if (!channel->readerCount && !nonBlock)
 			co_await channel->readerPresent.async_wait();
-
-		// TODO: Opening for write-only with no reader present should return NXIO (man 7 fifo).
 
 		OpenFile::serve(w_file);
 

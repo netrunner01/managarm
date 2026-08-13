@@ -624,6 +624,19 @@ HandleRequest::operator()(managarm::posix::SigactionRequest &&req,
 		co_return {};
 	}
 
+	// POSIX: SIGKILL and SIGSTOP cannot be caught, ignored, or have their action changed.
+	// Querying the old action (act == nullptr, i.e. !req.mode()) stays legal; only installing
+	// a new action for these two signals must fail with EINVAL.
+	if(req.mode() && (req.sig_number() == SIGKILL || req.sig_number() == SIGSTOP)) {
+		resp.set_error(managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		auto [send_resp] = co_await helix_ng::exchangeMsgs(conversation,
+			helix_ng::sendBragiHeadOnly(resp, frg::stl_allocator{})
+		);
+		HEL_CHECK(send_resp.error());
+		logBragiReply(resp);
+		co_return {};
+	}
+
 	auto removePendingSignal = [&](int signo) -> async::result<void> {
 		if (self->delayedSignal && self->delayedSignal->signalNumber == static_cast<int>(signo)) {
 			// If there is a pending signal that is now being ignored, remove it.

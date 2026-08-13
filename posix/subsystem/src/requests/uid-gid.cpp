@@ -278,14 +278,6 @@ HandleRequest::operator()(managarm::posix::SetGroupsRequest &&req,
 
 	logRequest(logRequests, self, "SET_GROUPS");
 
-	// A real setgroups() passes at most NGROUPS_MAX groups; reject a larger
-	// (bogus or malicious) count before allocating, so it cannot drive an
-	// unbounded resize into bad_alloc and abort posix-subsystem (Linux: EINVAL).
-	if(req.entries() > 65536) {
-		co_await sendErrorResponse<managarm::posix::SetGroupsResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
-		co_return {};
-	}
-
 	std::vector<gid_t> list;
 	list.resize(req.entries());
 

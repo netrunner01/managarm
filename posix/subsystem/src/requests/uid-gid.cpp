@@ -278,13 +278,31 @@ HandleRequest::operator()(managarm::posix::SetGroupsRequest &&req,
 
 	logRequest(logRequests, self, "SET_GROUPS");
 
+	// req.entries() is client-controlled and unbounded; a real setgroups() passes
+	// at most NGROUPS_MAX groups. Resizing to a larger claimed count was an
+	// unprivileged std::bad_alloc abort of the whole posix-subsystem (DEF-102).
+	// Bound the allocation to NGROUPS_MAX -- but do NOT skip the recvBuffer to
+	// reject early: the client bundles the group buffer in the same offer, so an
+	// un-consumed send desyncs the stream matcher (send x send ->
+	// transmissionMismatch -> HEL_CHECK panic). Post a bounded recvBuffer instead;
+	// an oversized send meets it as SendFlow x RecvFlow bufferTooSmall
+	// (kernel/thor/generic/stream.cpp) and is consumed, so we can reject cleanly.
+	constexpr size_t ngroupsMax = 65536; // Linux NGROUPS_MAX
+	size_t entries = req.entries();
+	size_t bounded = entries > ngroupsMax ? ngroupsMax : entries;
+
 	std::vector<gid_t> list;
-	list.resize(req.entries());
+	list.resize(bounded);
 
 	auto [recv_list] = co_await helix_ng::exchangeMsgs(
 			conversation,
-			helix_ng::recvBuffer(list.data(), req.entries() * sizeof(gid_t))
+			helix_ng::recvBuffer(list.data(), bounded * sizeof(gid_t))
 		);
+
+	if(entries > ngroupsMax) {
+		co_await sendErrorResponse<managarm::posix::SetGroupsResponse>(conversation, managarm::posix::Errors::ILLEGAL_ARGUMENTS);
+		co_return {};
+	}
 	HEL_CHECK(recv_list.error());
 
 	if(self->threadGroup()->uid() != 0) {
